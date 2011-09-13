@@ -1,0 +1,28 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+if ( $#ARGV != 0 ) {
+    die "scd68kdcleanup <file>\n";
+}
+
+open( DIS, '<'.$ARGV[0] );
+while ( my $line = <DIS> ) {
+    # reformat each line so it can be assembled before updated by hand
+    if ( $line =~ m/^(0x[0-9A-F]+):\s+((0x[0-9A-F]{4}\s+)+)(.*)$/ ) {
+	my $label = $1;
+	my $values = $2;
+	my $dis = $4;
+	$values =~ s/\s+$//g;
+	chomp $dis;
+	$values =~ s/\s+0x/,0x/g;
+	$line = "\t;; $label:\n\t;; $dis\n\tdc.w $values\n";
+    }
+    # SNASM68K does not accept (x,y) and (x,y,z) formats
+    # it accepts x(y) and x(y,z) though
+    $line =~ s/([\s,])\((-?0x[0-9A-F]+),([^,\)]+)\)/$1$2($3)/g;
+    $line =~ s/([\s,])\((-?0x[0-9A-F]+),([^,\)]+),([^,\)]+)\)/$1$2($3,$4)/g;
+    print $line;
+}
+close DIS;

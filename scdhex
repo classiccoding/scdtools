@@ -1,0 +1,87 @@
+#!/usr/bin/perl
+###############################################################################
+
+use strict;
+use warnings;
+
+sub Help {
+    die "\nscdhex <cmd> [cmdoptions] <files>\n\n<cmd>:\n\tsearch <search>\n\treplace <search> <replace>\n\nexamples:\n\tscdhex search 0000000008220A440C660E880EEE0AAA0888044408AE046A000E0008000400EE R*__.MMD\n\tscdhex replace 427900FF1512 4E714E714E71 R*__.MMD\n\n";
+}
+
+if ( $#ARGV < 1 ) {
+    &Help();
+}
+
+my $cmd = lc(shift @ARGV);
+my $tokenSearchString = '';
+my $tokenReplaceString = '';
+
+if ( $cmd eq 'search' ) {
+    if ( $#ARGV < 1 ) {
+	&Help();
+    }
+    $tokenSearchString = shift @ARGV;
+} elsif ( $cmd eq 'replace' ) {
+    if ( $#ARGV < 2 ) {
+	&Help();
+    }
+    $tokenSearchString = shift @ARGV;
+    $tokenReplaceString = shift @ARGV;
+} else {
+    &Help();
+}
+
+
+if ( $tokenSearchString !~ m/^[0-9A-F]*$/i ||
+     $tokenReplaceString !~ m/^[0-9A-F]*$/i ) {
+    &Help();
+}
+
+my $updates = 0;
+
+foreach my $binFile (@ARGV) {
+
+    open( BIN, $binFile ) or die "Cannot read file: $binFile\n";
+
+    binmode BIN;
+
+    my $binSize = -s $binFile;
+
+    my $binBuffer = '';
+
+    read( BIN, $binBuffer, $binSize );
+
+    my $tokenSearch = pack("H*",$tokenSearchString);
+    my $tokenReplace = pack("H*",$tokenReplaceString);
+
+    my $tokenLength = length($tokenSearch);
+
+    my $modified = 0;
+
+    my $index = 0;
+    while ( $index >= 0 ) {
+	$index = index($binBuffer,$tokenSearch,$index);
+	if ( $index >= 0 ) {
+	    $updates++;
+	    if ( $cmd eq 'search' ) {
+		printf( "$binFile: %8.8X\n", $index);
+		$index++;
+	    } elsif ( $cmd eq 'replace' ) {
+		substr($binBuffer,$index,$tokenLength) = $tokenReplace;
+		$index += length($tokenReplace);
+	    }
+	}
+    }
+
+    close BIN;
+
+    if ( $modified ) {
+	open( BIN, ">$binFile" );
+	print BIN $binBuffer;
+	close BIN;
+    }
+}
+
+if ( $cmd eq 'replace' ) {
+    print "$tokenSearchString -> $tokenReplaceString: $updates\n";
+}

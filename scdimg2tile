@@ -1,0 +1,324 @@
+#!/usr/bin/env perl
+###############################################################################
+# convert images to asm files for megadrive/megacd development
+###############################################################################
+
+# TODO ability to change imgLabel?
+# TODO more verbosity...
+
+use strict;
+use warnings;
+use Image::Magick;
+
+sub Help {
+    die "\nscdimg2tile [-palget] [-palcount=<#>] [-palfile=<file>] [-paloffset=<#>] [-palbyteoffset=<#>] [-map] [-mapoffset=<#>] [-showmap] [-sequentialmap] [-compress=<#>] [-magicpink] [-magicblack] [-nolabels] [-v=<#>] <imgfiles...>\n\n";
+}
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $verbosity = 2;
+
+my $paletteGet = 0;
+my $paletteFile = '';
+my $paletteOffset = 0;
+my $paletteCount = 1;
+
+my $map = 0;
+my $mapOffset = 0;
+my $showMap = 0;
+my $showTiles = 0;
+my $sequentialMap = 0;
+my $compress = 0;
+my $magicPink = 0;
+my $magicBlack = 0;
+my $labels = 1;
+
+my @imgFiles;
+
+my %missingColors;
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-palfile=(.+)$/i ) {
+	$paletteFile = $1;
+    } elsif ( $arg =~ /^-palget$/i ) {
+	$paletteGet = 1;
+    } elsif ( $arg =~ /^-palcount=(\d+)$/i ) {
+	$paletteCount = $1;
+    } elsif ( $arg =~ /^-palbyteoffset=(\d+)/i ) {
+	$paletteOffset = $1;
+    } elsif ( $arg =~ /^-paloffset=(\d+)$/i ) {
+	$paletteOffset = 32 * $1;
+    } elsif ( $arg =~ /^-map$/i ) {
+	$map = 1;
+    } elsif ( $arg =~ /^mapoffset=(\d+)$/i ) {
+	$map = 1;
+	$mapOffset = $1;
+    } elsif ( $arg =~ /^-showmap$/i ) {
+	$map = 1;
+	$showMap = 1;
+    } elsif ( $arg =~ /^-showtiles$/i ) {
+	$map = 1;
+	$showTiles = 1;
+    } elsif ( $arg =~ /^-sequentialmap$/i ) {
+	$map = 1;
+	$sequentialMap = 1;
+    } elsif ( $arg =~ /^-compress=(\d+)$/i ) {
+	$compress = $1;
+    } elsif ( $arg =~ /^-magicpink$/i ) {
+	$magicPink = 1;
+    } elsif ( $arg =~ /^-magicblack$/i ) {
+	$magicBlack = 1;
+    } elsif ( $arg =~ /^-nolabels$/i ) {
+	$labels = 0;
+    } elsif ( $arg =~ /^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } elsif ( -e $arg ) {
+	push @imgFiles, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( ! ( -e $paletteFile || $paletteGet ) || $#imgFiles < 0 ) {
+    print STDERR "\nNeed to specify -palfile and at least one img file\n";
+    &Help();
+}
+
+if ( ! $showMap && ! $showTiles && ! $paletteGet ) {
+    $showTiles = 1;
+}
+
+my $paletteData;
+
+if ( ! $paletteGet ) {
+    $paletteData = &ReadPalette();
+}
+
+my $img;
+my @tiles;
+my $alpha = 0;
+
+foreach my $imgFile (@imgFiles) {
+    &Img2Tile($imgFile);
+}
+
+my @colors = sort {$missingColors{$b} <=> $missingColors{$a}} keys %missingColors;
+
+if ( $paletteGet ) {
+    my $index = 0;
+    if ( $#colors + 1 > $paletteCount * 16 - 1 ) {
+	print STDERR "Too many colors for one palette (will use most frequent colors)\n";
+    }
+    for ( my $paletteIndex = 0; $paletteIndex < $paletteCount; $paletteIndex++ ) {
+	print ";; palette\n";
+	print " dc.w 0x0000\n";
+	for ( my $i = 0; $i < 15; $i++ ) {
+	    my $colorsIndex = $paletteIndex * 15 + $i;
+	    if ( $colorsIndex <= $#colors ) {
+		print ' dc.w '.$colors[$colorsIndex]."\n";
+	    } else {
+		print " dc.w 0x0000\n";
+	    }
+	}
+    }
+} else {
+    foreach my $c (@colors) {
+	my $count = $missingColors{$c};
+	print STDERR "Palette does not contain color: $c ($count)\n";
+    }
+}
+
+
+###############################################################################
+
+
+sub Img2Tile($) {
+    my ($imgFile) = @_;
+
+    @tiles = ();
+
+    my $imgLabel = $imgFile;
+    $imgLabel =~ s/\..*$//g;
+    $imgLabel =~ s/[^A-Za-z0-9]//g;
+
+    $img = Image::Magick->new();
+    my $x = $img->ReadImage($imgFile);
+    warn $x if $x;
+    $alpha = $img->Get('matte');
+    my $width = $img->Get('width');
+    my $height = $img->Get('height');
+
+    my $w = $width / 8;
+    my $h = $height / 8;
+    if ( $map ) {
+	print " ;; map (${w}x${h})\n";
+    } else {
+	print " ;; sprite ordering from (${w}x${h})\n";
+    }
+
+    if ( $labels && ( $showMap || $showTiles ) ) {
+	print "${imgLabel}TileWidth: equ ${w}\n";
+	print "${imgLabel}TileHeight: equ ${h}\n";
+    }
+
+    if ( $map ) {
+	if ( $labels && $showMap ) {
+	    print "Start${imgLabel}Map:\n";
+	}
+	for ( my $y = 0; $y < $height; $y += 8 ) {
+	    my $map;
+	    for ( my $x = 0; $x < $width; $x += 8 ) {
+		my $tileUsed = &ReadImgTile($x,$y);
+		$map .= chr($tileUsed);
+	    }
+	    if ( $showMap ) {
+		print " dc.b ";
+		for ( my $i = 0; $i < length($map); $i++ ) {
+		    print ',' if $i;
+		    printf("\$%2.2X",ord(substr($map,$i,1)));
+		}
+		print "\n";
+		if ( $labels && $y == 0 ) {
+		    print "StartRow${imgLabel}Map:\n";
+		}
+	    }
+	}
+	if ( $labels && $showMap ) {
+	    print "End${imgLabel}Map:\n";
+	}
+    } else {
+	# sprite read tiles sequentially in sprite order
+	for ( my $x = 0; $x < $width; $x += 8 ) {
+	    for ( my $y = 0; $y < $height; $y += 8 ) {
+		&ReadImgTile($x,$y);
+	    }
+	}
+    }
+
+    if ( $showTiles ) {
+	if ( $labels ) {
+	    print "Start${imgLabel}Tiles:\n";
+	}
+	if ( $compress ) {
+	    print " ;; compressed $compress\n";
+	}
+	for ( my $tileIndex = 0; $tileIndex <= $#tiles; $tileIndex++ ) {
+	    printf(" ;; tile \$%2.2X\n",$tileIndex+$mapOffset);
+	    if ( $compress == 0 ) {
+		for ( my $i = 0; $i < length($tiles[$tileIndex]); $i += 4 ) {
+		    printf(" dc.l \$%8.8X\n",unpack("N",substr($tiles[$tileIndex],$i,4)));
+		}
+	    } elsif ( $compress == 1 ) {
+		for ( my $i = 0; $i < length($tiles[$tileIndex]); $i += 4 ) {
+		    my $v0 = unpack("n",substr($tiles[$tileIndex],$i,2));
+		    my $v1 = unpack("n",substr($tiles[$tileIndex],$i+2,2));
+		    my $value = $v0 | ( $v1 << 2 );
+		    printf(" dc.w \$%4.4X\n",$value);
+		}
+	    } elsif ( $compress == 2 ) {
+		for ( my $i = 0; $i < length($tiles[$tileIndex]); $i += 8 ) {
+		    my $v0 = unpack("n",substr($tiles[$tileIndex],$i,2));
+		    my $v1 = unpack("n",substr($tiles[$tileIndex],$i+2,2));
+		    my $v2 = unpack("n",substr($tiles[$tileIndex],$i+4,2));
+		    my $v3 = unpack("n",substr($tiles[$tileIndex],$i+6,2));
+		    my $value = $v0 | ( $v1 << 1 ) | ( $v2 << 2 ) | ( $v3 << 3 );
+		    printf(" dc.w \$%4.4X\n",$value);
+		}
+	    } else {
+		die "Unsupported compress argument\n";
+	    }
+	}
+	if ( $labels ) {
+	    print "End${imgLabel}Tiles:\n";
+	}
+    }
+}
+
+sub ReadPalette {
+    if ( ! -e $paletteFile ) {
+	die "Bad palette file: $paletteFile";
+    }
+    if ( $paletteFile =~ m/\.(asm|68k)$/i ) {
+	my $paletteAsmFile = $paletteFile;
+	$paletteFile = 'TMP.BIN';
+	system("scdasm -v=$verbosity $paletteAsmFile $paletteFile");
+	if ( ! -e $paletteFile ) {
+	    die "Bad scdasm since didn't make: $paletteFile";
+	}
+    }
+
+    my $paletteData = chr(0x00)x32;
+
+    open( PALETTE, $paletteFile ) or die "Cannot read palette file: $!\n";
+    binmode PALETTE;
+    seek(PALETTE,$paletteOffset,0);
+    my $paletteDataBuffer;
+    if ( read(PALETTE,$paletteDataBuffer,32) == 32 ) {
+	$paletteData = $paletteDataBuffer;
+    }
+    close PALETTE;
+
+    return $paletteData;
+}
+
+# process an 8x8 tile
+sub ReadImgTile {
+    my ($x,$y) = @_;
+    my $tile = '';
+    for ( my $subrow = 0; $subrow < 8; $subrow++ ) {
+	# process each of the resulting four bytes
+	for ( my $i = 0; $i < 4; $i++ ) {
+	    # process two pixels for a hi and lo nibble
+	    my $valueHi = &GetPaletteIndex(($img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>($x+2*$i+0),'y'=>($y+$subrow)),$img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>($x+2*$i+0),'y'=>($y+$subrow))));
+	    my $valueLo = &GetPaletteIndex(($img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>($x+2*$i+1),'y'=>($y+$subrow)),$img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>($x+2*$i+1),'y'=>($y+$subrow))));
+	    my $segaValue = ( $valueHi << 4 ) | $valueLo;
+	    $tile .= chr($segaValue);
+	}
+    }
+    my $tileUsed = -1;
+    # for sprites, do not reuse existing tiles
+    if ( $map && ! $sequentialMap ) {
+	for ( my $tileIndex = 0; $tileIndex <= $#tiles; $tileIndex++ ) {
+	    if ( $tiles[$tileIndex] eq $tile ) {
+		$tileUsed = $tileIndex + $mapOffset;
+		last;
+	    }
+	}
+    }
+    if ( $tileUsed < 0 ) {
+	push @tiles, $tile;
+	$tileUsed = $#tiles + $mapOffset;
+    }
+    return $tileUsed;
+}
+
+
+# convert a normalized RGBA value to a sega palette index
+sub GetPaletteIndex {
+    my ($r,$g,$b,$a) = @_;
+    # 0x00-0x1F,0x20-0x3F...
+    my $color = chr(int(255*$b>>5)<<1).chr((int(255*$g>>5)<<5)|(int(255*$r>>5)<<1));
+    # check for transparent pixel if alpha channel in image
+    # check for magic pink (#FF00FF)
+    if ( ( $alpha && defined $a && $a == 1 ) ||
+	 ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
+	 ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
+	return 0;
+    }
+    if ( ! $paletteGet ) {
+	# start with 1 to avoid picking transparent index
+	# do check index 0 if no other matches found
+	for ( my $i = 1; $i <= 16; $i++ ) {
+	    my $pColor = substr($paletteData,($i%16)*2,2);
+	    if ( $color eq $pColor ) {
+		return $i;
+	    }
+	}
+    }
+    my $c = sprintf("0x%4.4X",unpack("n",$color));
+    $missingColors{$c}++;
+    return 0;
+}

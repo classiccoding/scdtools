@@ -1,0 +1,265 @@
+#!/usr/bin/perl
+###############################################################################
+# makes Ecco 2's MV001.CIN 3% smaller
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $cinepakWidth = 32*8;
+my $cinepakHeight = 14*8;
+my $cinepakIdentifier = 'SEGA';
+my $cinepakBaseRate = 600;
+
+my $cinepakFrameDuration = 75.5;
+
+my $cinepakForceAtLeastTwoPalettes = 1;
+
+my $fd = 0x0400;
+
+my $pcmFile = '';
+my $pcmDataRate = 16000;
+
+my $pcmFramePrefix = 'pcmchunk';
+
+my $customEncodingFile = '';
+
+# parse args
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-width=(\d+)$/i ) {
+	$cinepakWidth = $1;
+    } elsif ( $arg =~ /^-height=(\d+)$/i ) {
+	$cinepakHeight = $1;
+    } elsif ( $arg =~ /^-id=(.[4])$/i ) {
+	$cinepakIdentifier = $1;
+    } elsif ( $arg =~ /^-baserate=(\d+)$/i ) {
+	$cinepakBaseRate = $1;
+    } elsif ( $arg =~ /^-frameduration=(.+)$/i ) {
+	$cinepakFrameDuration = $1;
+    } elsif ( $arg =~ /^-custom=(.+)$/i ) {
+        $customEncodingFile = $1;
+    } elsif ( $arg =~ /^-pcmfile=(.+)$/i ) {
+        $pcmFile = $1;
+    } elsif ( $arg =~ /^-pcmfd=(\d+)$/i ) {
+        $fd = $1;
+    } elsif ( $arg =~ /^-pcmrate=(.+)$/i ) {
+	$pcmDataRate = $1;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+###############################################################################
+
+my $cinepakSampleTable = '';
+my $cinepakSampleData = '';
+
+my $pcmFrameSize = 0x4000;
+
+my $pcmFileSize = 0;
+
+my $pcmFrameIndex = 0;
+my @pcmFrameFiles;
+
+if ( $pcmFile ne '' ) {
+    $pcmFileSize = -s $pcmFile;
+
+    open( PCM, '<'.$pcmFile ) or die "Cannot read $pcmFile\n";
+
+    for ( my $pcmFileIndex = 0; $pcmFileIndex < $pcmFileSize; $pcmFileIndex += $pcmFrameSize ) {
+	my $pcmFrameSizeCurrent = $pcmFileSize - $pcmFileIndex;
+	if ( $pcmFrameSizeCurrent > $pcmFrameSize ) {
+	    $pcmFrameSizeCurrent = $pcmFrameSize;
+	}
+
+	my $pcmFrameData = '';
+	if ( read(PCM, $pcmFrameData, $pcmFrameSizeCurrent ) != $pcmFrameSizeCurrent ) {
+	    die "Cannot read from pcm file as expected\n";
+	}
+
+	my $pcmFrameFile = sprintf("%s%5.5d.pcm",$pcmFramePrefix,$pcmFrameIndex);
+	$pcmFrameIndex += 1;
+	push @pcmFrameFiles, $pcmFrameFile;
+
+	open( PCMFRAME, '>'.$pcmFrameFile ) or die "Cannot write $pcmFrameFile\n";
+	print PCMFRAME $pcmFrameData;
+	close PCMFRAME;
+    }
+
+    close PCM;
+}
+
+my $pcmFrameCount = $pcmFrameIndex;
+
+$pcmFrameIndex = 0;
+
+my $imgFrameIndex = 0;
+
+my $pcmTimeFinal = $cinepakBaseRate * $pcmFileSize / $pcmDataRate * $fd / 0x0400;
+my $pcmTimeFrame = $cinepakBaseRate * $pcmFrameSize / $pcmDataRate * $fd / 0x0400;
+
+my $pcmTimeCurrent = -0.4 * $pcmTimeFrame;
+
+my $imgTimeCurrent = 0;
+
+###############################################################################
+
+if ( $customEncodingFile ne '' ) {
+    my $customEval = '';
+    if ( open(CUSTOM,$customEncodingFile) ) {
+        binmode CUSTOM;
+        my $customEncodingFileSize = -s $customEncodingFile;
+        read(CUSTOM,$customEval,$customEncodingFileSize);
+        close CUSTOM;
+    }
+    eval($customEval);
+} else {
+    my @paldatas = sort <paldata*.bin>;
+    my @palmaps = sort <palmap*.bin>;
+    my @cinepaktiledatas = sort <cinepaktiledata*.bin>;
+    my $palmapsCount = $#palmaps+1;
+    for ( my $i = 0; $i <= $#cinepaktiledatas; $i++ ) {
+	my $palmap = $i < $palmapsCount ? $palmaps[$i] : '';
+	&AddImgFrame($cinepakFrameDuration,$paldatas[$i],$palmap,$cinepaktiledatas[$i]);
+    }
+}
+
+###############################################################################
+
+print
+    "FILMStart:\n".
+    "\tdc.b\t'FILM'\n".
+    "\tdc.l\t(FILMEnd-FILMStart)\n".
+    "\tdc.l\t0\n".
+    "\tdc.l\t0\n".
+    "FDSCStart\n".
+    "\tdc.b\t'FDSC'\n".
+    "\tdc.l\t(FDSCEnd-FDSCStart)\n".
+    "\tdc.b\t'$cinepakIdentifier'\n".
+    "\tdc.l\t$cinepakHeight\n".
+    "\tdc.l\t$cinepakWidth\n".
+    "FDSCEnd:\n".
+    "STABStart:\n".
+    "\tdc.b\t'STAB'\n".
+    "\tdc.l\t(STABEnd-STABStart)\n".
+    "\tdc.l\t$cinepakBaseRate\n".
+    "\tdc.l\t(STABSampleTableEnd-STABSampleTableStart)/16\n".
+    "STABSampleTableStart:\n".
+    $cinepakSampleTable.
+    # TODO match with Ecco 2 extra bytes
+    #"\tdc.l\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n".
+    #"\tdc.l\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n".
+    "STABSampleTableEnd:\n".
+    "STABEnd:\n".
+    "FILMEnd:\n".
+    "SampleDataStart:\n".
+    $cinepakSampleData.
+    "SampleDataEnd:\n";
+
+
+
+
+###############################################################################
+
+
+
+sub AddImgFrame {
+    my ($imgDuration,$imgPalette,$imgPaletteMap,$imgMap) = @_;
+    $imgDuration *= $fd / 0x0400;
+    while ( $pcmFrameIndex < $pcmFrameCount &&
+	    $imgTimeCurrent > $pcmTimeCurrent ) {
+	# add pcm frame
+	my $pcmDataStart = "PCMData${pcmFrameIndex}Start";
+	my $pcmDataEnd = "PCMData${pcmFrameIndex}End";
+	my $pcmFrameFile = $pcmFrameFiles[$pcmFrameIndex];
+	$cinepakSampleTable .= 
+	    "PCMEntry${pcmFrameIndex}:\n".
+	    "\tdc.l\t($pcmDataStart-SampleDataStart)\n".
+	    "\tdc.l\t($pcmDataEnd-$pcmDataStart)\n".
+	    "\tdc.l\t0xFFFFFFFF\n".
+	    "\tdc.l\t1\n";
+	$cinepakSampleData .=
+	    "$pcmDataStart:\n".
+	    "\tincbin\t$pcmFrameFile\n".
+	    "\teven\n".
+	    "$pcmDataEnd:\n";
+	$pcmFrameIndex += 1;
+	$pcmTimeCurrent += $pcmTimeFrame;
+    }
+    my $imgDataStart = "ImgData${imgFrameIndex}Start";
+    my $imgDataEnd = "ImgData${imgFrameIndex}End";
+    my $imgPaletteSize = -s $imgPalette;
+    my $imgPaletteCount = $imgPaletteSize >> 5;
+    my $imgPaletteMapSize = $imgPaletteCount > 1 ? -s $imgPaletteMap : 0;
+    my $imgMapSize = 32 * $cinepakWidth/8 * $cinepakHeight/8;
+    my $imgTimeCurrentInt = int($imgTimeCurrent);
+    my $imgDurationInt = int($imgTimeCurrent + $imgDuration) - $imgTimeCurrentInt;
+    my $cinepakForceAtLeastTwoPalettesThisImage = 0;
+    if ( $cinepakForceAtLeastTwoPalettes &&
+	 $imgPaletteCount == 1 ) {
+	$cinepakForceAtLeastTwoPalettesThisImage = 1;
+	$imgPaletteCount = 2;
+	$imgPaletteSize = 2*32;
+	$imgPaletteMapSize = 4 * int( ( $cinepakWidth/8 * $cinepakHeight/8 + 15 ) / 16 );
+    }
+    $cinepakSampleTable .= 
+	"ImgEntry${imgFrameIndex}:\n".
+	"\tdc.l\t($imgDataStart-SampleDataStart)\n".
+	"\tdc.l\t($imgDataEnd-$imgDataStart)\n".
+	"\tdc.l\t$imgTimeCurrentInt\n".
+	"\tdc.l\t$imgDurationInt\n";
+    $cinepakSampleData .=
+	"$imgDataStart:\n".
+	"\tdc.b\t'SM',0x00,0x2".($imgPaletteCount-1)."\n".
+	"\tdc.l\t".(12+$imgPaletteSize+$imgPaletteMapSize+$imgMapSize)."\n".
+	"\tdc.w\t".($cinepakWidth/8)."\n".
+	"\tdc.w\t".($cinepakHeight/8)."\n".
+	"\tincbin\t$imgPalette\n";
+
+    if ( $cinepakForceAtLeastTwoPalettesThisImage ) {
+	# zeroed extra palette
+	$cinepakSampleData .=
+	    "\tdc.w\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+	# zeroed palette map
+	$cinepakSampleData .=
+	    "\tdc.l\t0".(",0"x($imgPaletteMapSize/4-1))."\n";
+    } elsif ( $imgPaletteCount > 1 ) {
+	$cinepakSampleData .=
+	    "\tincbin\t$imgPaletteMap\n";
+    }
+    $cinepakSampleData .=
+	"\tincbin\t$imgMap\n".
+	"$imgDataEnd:\n";
+    $imgFrameIndex += 1;
+    $imgTimeCurrent += $imgDuration;
+}
+
+sub Help {
+    die '
+scdcinepakencode [options] > <ASMFILE>
+
+[description]
+  outputs an assembly of the desired Cinepak file
+
+[options]
+  -silent             no audio stream
+  -width=<#>          sets the pixel width of the images
+  -height=<#>         sets the pixel height of the images
+  -id=<id>            set the four character id (defaults to SEGA)
+  -baserate=<#>       sets the base rate (ignored, not sure if used,
+                      defaults to 600)
+  -frameduration=<#>  sets the frame duration (when not custom)
+  -custom=<file>      indicates a PERL file to customize the frames
+                      otherwise uses paldata*.bin, palmap*.bin,
+                      cinepaktiledata*.bin
+  -pcmfile=<file>     pcm file, if not specified, will produce silent movie
+  -pcmfd=<#>          accomodates an encoder with a different FD value
+  -pcmrate=<#>        acoomadates an encoder with a different PCM data rate
+
+';
+}

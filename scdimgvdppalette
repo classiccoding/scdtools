@@ -1,0 +1,160 @@
+#!/usr/bin/env perl
+###############################################################################
+# convert images to asm files for megadrive/megacd development
+###############################################################################
+
+# TODO ability to change imgLabel?
+# TODO more verbosity...
+
+use strict;
+use warnings;
+use Image::Magick;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $verbosity = 2;
+
+my $magicPink = 0;
+my $magicBlack = 0;
+
+my @imgFiles;
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-magicpink$/i ) {
+	$magicPink = 1;
+    } elsif ( $arg =~ /^-magicblack$/i ) {
+	$magicBlack = 1;
+    } elsif ( -e $arg ) {
+	push @imgFiles, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+foreach my $imgFile (@imgFiles) {
+    &ImgExtractColors($imgFile);
+}
+
+
+
+###############################################################################
+
+
+sub ImgExtractColors($) {
+    my ($imgFile) = @_;
+
+    my $imgLabel = $imgFile;
+    $imgLabel =~ s/\..*$//g;
+    $imgLabel =~ s/[^A-Za-z0-9]//g;
+
+    my $img = Image::Magick->new();
+    my $x = $img->ReadImage($imgFile);
+    warn $x if $x;
+    $img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
+
+    my @colors = &GetSegaColors($img);
+    my $colorsLength = $#colors + 1;
+
+    my $imgPalette = Image::Magick->new();
+    $imgPalette->Set(size=>"${colorsLength}x1");
+    $x = $imgPalette->ReadImage('xc:black');
+    warn $x if $x;
+
+    for ( my $x = 0; $x < $colorsLength; $x++ ) {
+	my $c = $colors[$x];
+	my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
+		       ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
+		       (   ord(substr($c,1,1))        & 0xE ) / 14 );
+	for ( my $i = 0; $i < 3; $i++ ) {
+	    $pixels[$i] = $pixels[$i]*0.95 + 0.025;
+	}
+	$imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
+    }
+    
+    if ( $colorsLength > 16 ) {
+	$img->Remap('image'=>$imgPalette,dither=>'false');
+
+	$img->Write('a0.png');
+
+	undef $imgPalette;
+
+	#$img->Quantize('colors'=>16,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
+	$img->Quantize('colors'=>16,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
+
+	$img->Write('a1.png');
+
+	@colors = &GetSegaColors($img);
+	$colorsLength = $#colors + 1;
+
+	if ( $colorsLength < 16 ) {
+	    push @colors, chr(0x00).chr(0x00);
+	} elsif ( $colorsLength > 16 ) {
+	    $colorsLength = 16;
+	}
+
+	$imgPalette = Image::Magick->new();
+	$imgPalette->Set(size=>"${colorsLength}x1");
+	$x = $imgPalette->ReadImage('xc:black');
+	warn $x if $x;
+
+	for ( my $x = 0; $x < $colorsLength; $x++ ) {
+	    my $c = $colors[$x];
+	    my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
+			   ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
+			   (   ord(substr($c,1,1))        & 0xE ) / 14 );
+	    for ( my $i = 0; $i < 3; $i++ ) {
+		$pixels[$i] = $pixels[$i]*0.95 + 0.025;
+	    }
+	    $imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
+	}
+
+	undef $img;
+
+	$img = Image::Magick->new();
+	$x = $img->ReadImage($imgFile);
+	warn $x if $x;
+	$img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
+    }
+
+    $img->Write('a2.png');
+
+    #$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
+    $img->Remap('image'=>$imgPalette,dither=>'false');
+
+    $img->Write('a3.png');
+}
+
+sub GetSegaColors {
+    my $img = $_[0];
+
+    my %colors;
+
+    my $width = $img->Get('width');
+    my $height = $img->Get('height');
+    my $alpha = $img->Get('matte');
+
+    for ( my $y = 0; $y < $height; $y++ ) {
+	for ( my $x = 0; $x < $width; $x++ ) {
+	    # process two pixels for a hi and lo nibble
+	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
+	    my $a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x,'y'=>$y);
+	    my $color = chr(int(255*$b>>5)<<1).chr((int(255*$g>>5)<<5)|(int(255*$r>>5)<<1));
+	    if ( ( $alpha && defined $a && $a == 1 ) ||
+		 ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
+		 ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
+		next 0;
+	    }
+	    $colors{$color}++;
+	}
+    }
+
+    return sort {$colors{$b} <=> $colors{$a}} keys %colors;
+}
+
+sub Help {
+    die "\nscdimg2tile [-palget] [-palcount=<#>] [-palfile=<file>] [-paloffset=<#>] [-palbyteoffset=<#>] [-map] [-mapoffset=<#>] [-showmap] [-sequentialmap] [-compress=<#>] [-magicpink] [-magicblack] [-nolabels] [-v=<#>] <imgfiles...>\n\n";
+}
+

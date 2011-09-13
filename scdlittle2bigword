@@ -1,0 +1,32 @@
+#!/usr/bin/perl
+###############################################################################
+# I used this to convert cram part of savestate file the more convient endian
+###############################################################################
+
+use strict;
+use warnings;
+
+foreach my $file (@ARGV) {
+    if ( open( FILE, $file ) ) {
+	binmode FILE;
+
+	my $result = '';
+	my $buffer = '';
+
+	while (1) {
+	    read( FILE, $buffer, 2 );
+	    if ( length($buffer) != 2 ) {
+		last;
+	    }
+	    $result .= substr($buffer,1,1) . substr($buffer,0,1);
+	}
+
+	close FILE;
+
+	if ( open( FILE, ">$file") ) {
+	    print FILE $result;
+	}
+    }
+
+    close FILE;
+}

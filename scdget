@@ -1,0 +1,9 @@
+#!/bin/sh
+###############################################################################
+# make an iso out of a sega cd in the cdrom
+#   * only supports 1 track sega cds for now, haven't tried more complex ones
+###############################################################################
+
+dd if=/dev/cdrom of=cdrom.iso
+
+#cdrdao read-cd --read-raw --datafile cdrom.bin --device ATAPI:0,0,0 --driver generic-mmc-raw cdrom.cue

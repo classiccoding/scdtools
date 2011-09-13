@@ -1,0 +1,37 @@
+#!/usr/bin/perl
+###############################################################################
+# replace part of a binary file with the contents of another binary file
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV != 2 ) {
+    die "\nscdupdateinfile <updatefile> <updateoffset> <replacefile>\n\n";
+}
+
+my $updateFileName = $ARGV[0];
+my $updateOffset = $ARGV[1];
+my $replaceFileName = $ARGV[2];
+
+my $replaceFileSize = -s $replaceFileName;
+
+if ( $replaceFileSize <= 0 ) {
+    exit;
+}
+
+open( REPLACE, "<$replaceFileName" ) or die "Cannot read $replaceFileName\n";
+
+my $replaceFileData = '';
+if ( read( REPLACE, $replaceFileData, $replaceFileSize ) != $replaceFileSize ) {
+    die "Cannot read all of $replaceFileName\n";
+}
+
+close REPLACE;
+
+open( UPDATE, "+<$updateFileName" ) or die "Cannot update $updateFileName\n";
+seek( UPDATE, $updateOffset, 0 );
+
+print UPDATE $replaceFileData;
+
+close UPDATE;

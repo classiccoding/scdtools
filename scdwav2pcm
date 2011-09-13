@@ -1,0 +1,75 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+sub Help {
+    die '
+scdwav2pcm <wavFile> <pcmFile>
+
+[description]
+  converts an unsigned 8 bit unsigned wav file to an 8 bit signed magnitude
+  pcm file (does not test if wav file is in unexpected format)
+
+';
+}
+
+if ( $#ARGV != 1 ) {
+    &Help();
+}
+
+my $waveFile = $ARGV[0];
+my $pcmFile = $ARGV[1];
+
+if ( ! open( WAVE, '<'.$waveFile ) ) {
+    print STDERR "Could not open $waveFile\n";
+    return 0;
+}
+binmode WAVE;
+
+if ( ! open( PCM, '>'.$pcmFile ) ) {
+    print STDERR "Could not open $pcmFile\n";
+    return 0;
+}
+binmode PCM;
+
+my $ignore = '';
+if ( read(WAVE,$ignore,0x28) != 0x28 ) {
+    return 0;
+}
+
+my $dataSize = '';
+if ( read(WAVE,$dataSize,4) != 4 ) {
+    return 0;
+}
+
+$dataSize = unpack("V",$dataSize);
+
+my $data = '';
+if ( read(WAVE,$data,$dataSize) != $dataSize ) {
+    return 0;
+}
+
+close WAVE;
+
+my $pcmData = '';
+for ( my $i = 0; $i < $dataSize; $i++ ) {
+    my $valueWave = ord(substr($data,$i,1));
+    my $value;
+    if ( $valueWave >= 0x80 ) {
+	$value = $valueWave - 0x80;
+    } else {
+	$value = 0x80 | ( 0x80 - $valueWave );
+	if ( $value == 0xFF ) {
+	    print STDERR "truncating waveform\n";
+	    $value = 0xFE;
+	}
+    }
+    $pcmData .= chr($value);
+}
+
+$pcmData .= chr(0xFF)x2;
+
+print PCM $pcmData;
+close PCM;
+

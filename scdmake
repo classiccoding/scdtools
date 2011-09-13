@@ -1,0 +1,2005 @@
+#!/usr/bin/perl
+###############################################################################
+# bgvanbur's scdmake script
+###############################################################################
+# TODO would be cool to be able to make a ROM using scdmake
+#   right now can do it in a hacky sort of fashion
+#   and for more complex ISOs this would be tricky automatically
+# TODO support making bin/cue format (the EDC done, RS not started)
+# TODO handle files in SCDMAKE.INC that are in subdir that do not exist
+# TODO strict order (not joliet ones are either all or nothing)
+#   1) SCD 2) PVD 3) joliet SVD 4) little path table 5) big path table
+#   6) joliet little path table 7) joliet big path table 8) root extent
+#   9) joliet root extent 10) files
+###############################################################################
+# TODO does not optimize duplicated files
+# TODO finish joliet support (only supports 8.3 [A-Za-z0-9] in most places)
+###############################################################################
+
+use strict;
+use warnings;
+use Carp ();
+# for more verbose warnings and such
+local $SIG{__WARN__} = \&Carp::cluck;
+
+use Cwd;
+use File::Spec;
+
+# the dir/file that will potentially be in the ISO 9660 part
+my %dirs;
+my %files;
+
+# information to track current iso index, and to buffer the output
+# buffer will empty on a sector boundary
+my $isoIndex = 0;
+my $isoBuffer = '';
+my $isoBufferLength = 0;
+
+###############################################################################
+# variables for SCDMAKE.CFG
+###############################################################################
+
+# 0: none, 1: some, 2: most
+my $verbosity = 2;                   # not in config by default
+
+# a value different than 0x800 (2048) has never been tested or desired
+# change at your own risk
+my $sectorSize = 0x800;              # not in config by default
+
+# 300 sector minimum for burning
+my $sectorCount = 300;               # not in config by default
+
+# the amount to pad at the end of the data sector
+# Sega CD needs at least 1 (since zero padding makes last sector unreadable)
+# Linux needs at least 15
+# http://www.troubleshooters.com/linux/coasterless.htm recommends 63
+my $padSize = 63;                    # not in config by default
+
+# 0 for ISO
+# 1 for BIN/CUE (TODO this is a work in progress since it puts in zero for the parity fields)
+my $isoType = 0;                     # not in config by default
+
+# Level 1: File names are limited to eight characters with a three-character extension, using upper case letters, numbers and underscore only. The maximum depth of directories is eight.
+# Level 2: File names are not limited to 11 characters (the 8.3 format) but can be up to the maximum allowed by the 1 byte counter in the directory entry and the filename length byte counter. Typically, this is close to 180 characters, depending on how many extended attributes are present.
+# Level 3: Files are allowed to be non-contiguous (i.e., fragmented), principally to allow packet writing or incremental CD recording).
+ 
+my $isoForceLevel1 = 1;              # not in config by default
+
+# sega cd: ids for system id
+my $scddiscid;
+my $scdvolumename;
+my $scdvolumeversion;
+my $scdvolumetype = 0x0001;          # not in config by default
+my $scdsystemname;
+my $scdsystemversion;
+my $scdipstart = 0x00000800;
+my $scdipend;                        # not in config by default
+my $scdspstart;                      # not in config by default
+my $scdspend;                        # not in config by default
+
+# sega cd: ids for disc id
+my $scdhardware;                     # not in config by default
+my $scdcompanyname;
+my $scdgametitledomestic;
+my $scdgametitleoverseas;
+my $scddisctype;
+my $scdproductcode;
+my $scdproductversion;
+my $scdio;
+my $scdmodem;
+my $scdcountry;                      # not in config by default
+
+my $scdiprealstart = 0x200 + 1412;
+
+# ISO 9660: ids for primary volume descriptor (pvd)
+my $pvdsystemid;                     # not in config by default
+my $pvdvolumeid;
+my $pvdvolumesetid;
+my $pvdpublisherid;
+my $pvdpreparerid;
+my $pvdapplicationid = "SCDMAKE";    # not in config by default
+my $pvdcopyrightfileid;
+my $pvdabstractfileid;
+my $pvdbibliographicalfileid;
+
+my $joliet = 0;                      # not in config by default
+# Joliet: ids for supplementary volume descriptor (svd)
+# these joliet values default to pvd values if not set
+my $jolietsystemid;                  # not in config by default
+my $jolietvolumeid;                  # not in config by default
+my $jolietvolumesetid;               # not in config by default
+my $jolietpublisherid;               # not in config by default
+my $jolietpreparerid;                # not in config by default
+my $jolietapplicationid = "SCDMAKE"; # not in config by default
+my $jolietcopyrightfileid;           # not in config by default
+my $jolietabstractfileid;            # not in config by default
+my $jolietbibliographicalfileid;     # not in config by default
+
+# ISO 9660: table locations (as sector locations)
+my $pathTableLittleEndian;           # not in config by default
+my $pathTableBigEndian;              # not in config by default
+my $jolietPathTableLittleEndian;     # not in config by default
+my $jolietPathTableBigEndian;        # not in config by default
+my $rootExtent;                      # not in config by default
+my $jolietRootExtent;                # not in config by default
+my $fileExtent;                      # not in config by default
+my $fileExtentCurrentOffset = 0;     # not in config by default
+
+# sega cd dev manual says to fill with 0xFF
+# sonic cd fills with 0x00
+my $fillUnusedFileWithZero = 0;      # not in config by default
+
+# files
+my $ipprefix;
+my $spprefix;
+my $outprefix;
+
+# ippad=0 will put the SP in the same place as if ippad=1
+# so the SP will not be efficiently placed
+my $ippad = 1;                       # not in config by default
+my $ipassemble = 1;                  # not in config by default
+my $spassemble = 1;                  # not in config by default
+
+# if desire a specific ISO file layout
+my $isoMatch = '';                   # not in config by default
+my $isoMatchFileExtent = -1;         # not in config by default
+
+# files to put at beginning of file data and info put in SCDMAKE.INC file
+my @scdmakeinc;                      # not in config by default
+# 0: longword equs, 1: dc.w, 2: dc.l, 3: word sector equs
+my $scdmakeincType = 0;              # not in config by default
+
+# 0: not used, 1: hidden from path tables / extents, 2: public
+my $isoPublicDefault = 2;            # not in config by default
+
+# besides default, fine grain control of not used / hidden / public files
+my @isoNotUsedFiles;                 # not in config by default
+my @isoHiddenFiles;                  # not in config by default
+my @isoPublicFiles;                  # not in config by default
+
+my @tmpFilesToRemove;                # not in config by default
+
+my $defaults = '# scdmake configuration
+$scddiscid                = \'SEGADISCSYSTEM\';
+$scdvolumename            = \'DEMO\';
+$scdvolumeversion         = \'0000\';
+$scdsystemname            = \'SCDMAKE\';
+$scdsystemversion         = \'0000\';
+$scdcompanyname           = \'T-00\';
+$scdgametitledomestic     = \'DEMO\';
+$scdgametitleoverseas     = \'DEMO\';
+$scddisctype              = \'GM\';
+$scdproductcode           = \'00000\';
+$scdproductversion        = \'00\';
+$scdio                    = \'J\';
+$scdmodem                 = \'\';
+$pvdvolumeid              = \'DEMO\';
+$pvdvolumesetid           = \'\';
+$pvdpublisherid           = \'\';
+$pvdpreparerid            = \'\';
+$pvdcopyrightfileid       = \'\';
+$pvdabstractfileid        = \'\';
+$pvdbibliographicalfileid = \'\';
+$ipprefix                 = \'IP\';
+$spprefix                 = \'SP\';
+$outprefix                = \'SCD\';
+';
+
+eval($defaults);
+warn $@ if $@;
+
+my $cfg = 'SCDMAKE.CFG';
+my $inc = 'SCDMAKE.INC';
+if ( -e $cfg ) {
+    if ( open( CFG, $cfg ) ) {
+	binmode CFG;
+	my $cfgBuffer = '';
+	if ( read(CFG,$cfgBuffer,-s $cfg) ) {
+	    eval($cfgBuffer);
+	    warn $@ if $@;
+	}
+    }
+    close CFG;
+} elsif ( $#ARGV >= 0 &&
+	  $ARGV[0] eq '-make' ) {
+    print STDERR "Making a default $cfg config file\n";
+    if ( open( CFG, ">$cfg" ) ) {
+	print CFG $defaults;
+    }
+    close CFG;
+} else {
+    die "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
+}
+
+my $loop;
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-country=([uje]|all)$/i ) {
+	$scdcountry = $1;
+    } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } else {
+	die "Bad argument: $arg\n";
+    }
+}
+
+if ( $joliet ) {
+    if ( ! defined $jolietsystemid && defined $pvdsystemid ) {
+	$jolietsystemid = $pvdsystemid;
+    }
+    if ( ! defined $jolietvolumeid && defined $pvdvolumeid ) {
+	$jolietvolumeid = $pvdvolumeid;
+    }
+    if ( ! defined $jolietvolumesetid && defined $pvdvolumesetid ) {
+	$jolietvolumesetid = $pvdvolumesetid;
+    }
+    if ( ! defined $jolietpublisherid && defined $pvdpublisherid ) {
+	$jolietpublisherid = $pvdpublisherid;
+    }
+    if ( ! defined $jolietpreparerid && defined $pvdpreparerid ) {
+	$jolietpreparerid = $pvdpreparerid;
+    }
+    if ( ! defined $jolietapplicationid && defined $pvdapplicationid ) {
+	$jolietapplicationid = $pvdapplicationid;
+    }
+    if ( ! defined $jolietcopyrightfileid && defined $pvdcopyrightfileid ) {
+	$jolietcopyrightfileid = $pvdcopyrightfileid;
+    }
+    if ( ! defined $jolietabstractfileid && defined $pvdabstractfileid ) {
+	$jolietabstractfileid = $pvdabstractfileid;
+    }
+    if ( ! defined $jolietbibliographicalfileid && defined $pvdbibliographicalfileid ) {
+	$jolietbibliographicalfileid = $pvdbibliographicalfileid;
+    }
+}
+
+# PVD date format
+# TODO get date in perl...
+chomp(my $date = (`date -u +%Y%m%d%H%M%S00`)[0]);
+
+# extent entry date format
+if ( $date !~ m/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})00$/ ) {
+    die "Could not parse date: $date\n";
+}
+my $year = $1;
+my $month = $2;
+my $day = $3;
+my $hour = $4;
+my $min = $5;
+my $sec = $6;
+my $dateExtent = chr($year-1900).chr($month).chr($day).chr($hour).chr($min).chr($sec).chr(0x00);
+
+# IP/SP filenames
+my $ipasm = $ipprefix .'.ASM';
+my $iplst = $ipprefix .'.LST';
+my $ipbin = $ipprefix .'.BIN';
+my $spasm = $spprefix .'.ASM';
+my $splst = $spprefix .'.LST';
+my $spbin = $spprefix .'.BIN';
+
+# make a copy of these tools to put on the SCD with the source (hopefully)
+if ( $isoPublicDefault > 1 ) {
+    # now that public, could just point to a revision of scdtools
+    # system("scdback");
+}
+
+# assemble the IP
+# cannot assemble the SP yet since want to make SCDMAKE.INC first
+if ( $ipassemble ) {
+    system("scdasm -v=$verbosity $ipasm $ipbin $iplst");
+}
+
+sub Touch {
+    foreach my $file (@_) {
+	# TODO platform specific command
+	system("touch $file");
+    }
+}
+
+# this ensures the path tables and extents size can be precisely determined
+&Touch($splst,$spbin);
+if ( $#scdmakeinc >= 0 ) {
+    &Touch($inc);
+}
+
+# remove temporary files and such
+foreach my $file (@tmpFilesToRemove) {
+    if ( -e $file ) {
+	# TODO platform
+	system("rm $file");
+    }
+}
+
+# determine files/dirs that will be used
+&DetermineSCDMakeIncFileInformationForIso();
+&DetermineFileInformationForIso();
+
+foreach my $file (@isoNotUsedFiles) {
+    &SetPublic($file,0);
+}
+foreach my $file (@isoHiddenFiles) {
+    &SetPublic($file,1);
+}
+foreach my $file (@isoPublicFiles) {
+    &SetPublic($file,2);
+}
+
+# ensure root dir is public
+$dirs{''}{'public'} = 2;
+
+# determine path table locations and extent locations
+my $location = 0x10 + 2;
+if ( $joliet ) {
+    $location++;
+}
+if ( ! defined $pathTableLittleEndian ) {
+    $pathTableLittleEndian = $location;
+}
+
+&DeterminePathTableIndexes();
+my $pathTableByteSize = &GetPathTableByteSize();
+if ( $pathTableLittleEndian ) {
+    $location = $pathTableLittleEndian + &NumberOfSectorsForSize($pathTableByteSize);
+}
+
+if ( ! defined $pathTableBigEndian ) {
+    $pathTableBigEndian = $location;
+}
+if ( $pathTableBigEndian ) {
+    $location = $pathTableBigEndian + &NumberOfSectorsForSize($pathTableByteSize);
+}
+
+if ( $joliet ) {
+    if ( ! defined $jolietPathTableLittleEndian ) {
+	$jolietPathTableLittleEndian = $location;
+    }
+    if ( $jolietPathTableLittleEndian ) {
+	$location = $jolietPathTableLittleEndian + &NumberOfSectorsForSize($pathTableByteSize);
+    }
+    if ( ! defined $jolietPathTableBigEndian ) {
+	$jolietPathTableBigEndian = $jolietPathTableLittleEndian + &NumberOfSectorsForSize($pathTableByteSize);
+    }
+    if ( $jolietPathTableBigEndian ) {
+	$location = $jolietPathTableBigEndian + &NumberOfSectorsForSize($pathTableByteSize);
+    }
+}
+
+if ( ! defined $rootExtent ) {
+    $rootExtent = $location;
+}
+
+# determine extent tables length (non-joliet)
+my $rootExtentSectorSize = &GetExtentTablesSectorSize(0);
+my $jolietRootExtentSectorSize = 0;
+
+if ( $joliet ) {
+    if ( ! defined $jolietRootExtent ) {
+	$jolietRootExtent = $rootExtent + $rootExtentSectorSize;
+    }
+    $jolietRootExtentSectorSize = &GetExtentTablesSectorSize(1);
+}
+
+if ( ! defined $fileExtent ) {
+    if ( $joliet ) {
+	$fileExtent = $jolietRootExtent + $jolietRootExtentSectorSize;
+    } else {
+	$fileExtent = $rootExtent + $rootExtentSectorSize;
+    }
+}
+
+# makes an include file for the SP (to simplify CD reading)
+if ( $#scdmakeinc >= 0 ) {
+    if ( open( SCDMAKEINC, ">$inc" ) ) {
+	foreach my $file ( @scdmakeinc ) {
+	    if ( $spassemble &&
+		 ( $file eq $spbin ||
+		   $file eq $splst ||
+		   $file eq $inc ) ) {
+		print "Should not specify $file in \@scdmakeinc\n";
+	    }
+	    my $fileLabel = uc($file);
+	    $fileLabel =~ s/[^A-Z0-9]/_/g;
+	    my $fileStartSectors = $fileExtent + $files{$file}{'offset'};
+	    my $fileSizeBytes = $files{$file}{'sizeBytes'};
+	    my $fileStartBytes = $sectorSize * $fileStartSectors;
+	    my $fileSizeSectors = &NumberOfSectorsForSize($fileSizeBytes);
+	    # by making them %8.8X numbers, changes in the numbers
+	    # will not affect the size of the SCDMAKE.INC file
+	    my $type = 8;
+	    if ( $scdmakeincType & 1 ) {
+		$type = 4;
+		if ( $fileStartSectors + $fileSizeSectors > 0x800 * 0x10000 ) {
+		    print STDERR "Using scdmakeincType == 1 and went over 128K for SCDMAKE.INC files, switch to scdmakeincType == 2 and adjust usage for the longword instead of word usage\n";
+		}
+	    }
+	    my $fileStartSectorsNice = sprintf("0x%${type}.${type}X",$fileStartSectors);
+	    my $fileSizeSectorsNice = sprintf("0x%${type}.${type}X",$fileSizeSectors);
+	    if ( $scdmakeincType == 1 ) {
+		print SCDMAKEINC " ;; ${fileLabel} sector start and sector size\n";
+		print SCDMAKEINC " dc.w ${fileStartSectorsNice}, ${fileSizeSectorsNice}\n";
+	    } elsif ( $scdmakeincType == 2 ) {
+		print SCDMAKEINC " ;; ${fileLabel} sector start and sector size\n";
+		print SCDMAKEINC " dc.l ${fileStartSectorsNice}, ${fileSizeSectorsNice}\n";
+	    } else {
+		my $fileStartBytesNice = sprintf("0x%${type}.${type}X",$fileStartBytes);
+		my $fileSizeBytesNice = sprintf("0x%${type}.${type}X",$fileSizeBytes);
+		print SCDMAKEINC "FILE_${fileLabel}_START_BYTE: equ ${fileStartBytesNice}\n";
+		print SCDMAKEINC "FILE_${fileLabel}_SIZE_BYTES: equ ${fileSizeBytesNice}\n";
+		print SCDMAKEINC "FILE_${fileLabel}_START_SECTOR: equ ${fileStartSectorsNice}\n";
+		print SCDMAKEINC "FILE_${fileLabel}_SIZE_SECTORS: equ ${fileSizeSectorsNice}\n";
+	    }
+	}
+    }
+    close SCDMAKEINC;
+}
+
+# now that SCDMAKE.INC made, can assemble SP
+if ( $spassemble ) {
+    system("scdasm -v=$verbosity $spasm $spbin $splst");
+}
+
+if ( ! defined $scdipend ) {
+    # some of IP.BIN will be put in 0x200-0x800
+    my $ipbinSize = -e $ipbin ? -s $ipbin : 0;
+    my $sizeBytes = $ipbinSize - ($sectorSize - $scdiprealstart);
+    if ( $sizeBytes > 24*1024 ) {
+	print STDERR "Sega CD development guide says somewhere around 24K gets in trouble\n";
+    }
+    my $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
+    $scdipend = $sizeSectors * $sectorSize;
+}
+
+if ( ! defined $scdspend ) {
+    my $sizeBytes = -e $spbin ? -s $spbin : 0;
+    if ( $sizeBytes < $sectorSize ) {
+	$sizeBytes = $sectorSize;
+    }
+    if ( $scdiprealstart + $sizeBytes > 24*1024 ) {
+	print STDERR "Sega CD development guide says somewhere around 24K gets in trouble\n";
+    }
+    my $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
+    $scdspend = $sizeSectors * $sectorSize;
+}
+
+if ( ! defined $scdspstart ) {
+    if ( $scdipstart + $scdipend + $scdspend > 16 * $sectorSize ) {
+	die "Could not fit both IP and SP in first 16 sectors, (you can change some variables in SCDMAKE.CFG to do this)\n";
+    }
+    $scdspstart = $scdipstart + $scdipend;
+}
+
+# all modified files should be done now, safe to place all the remaining files
+&PlaceUnplacedFiles();
+
+if ( $fileExtent + $fileExtentCurrentOffset + $padSize > $sectorCount ) {
+    $sectorCount = $fileExtent + $fileExtentCurrentOffset + $padSize;
+}
+
+# country based defaults if not set up
+if ( ! defined $scdcountry ) {
+    $scdcountry = 'U';
+}
+
+my $isoSuffix = 'ISO';
+if ( $isoType == 1 ) {
+    $isoSuffix = 'BIN';
+}
+
+# support making all three country scd iso at once
+if ( lc($scdcountry) eq 'all' ) {
+    my $scdhardwareDefined = ( defined $scdhardware );
+    my $pvdsystemidDefined = ( defined $pvdsystemid );
+    my $jolietsystemidDefined = ( defined $jolietsystemid );
+
+    $scdcountry = 'U';
+    &MakeISO($outprefix.'_US.'.$isoSuffix);
+
+    if ( ! $scdhardwareDefined ) {
+	$scdhardware = undef;
+    }
+    if ( ! $pvdsystemidDefined ) {
+	$pvdsystemid = undef;
+    }
+    if ( ! $jolietsystemidDefined ) {
+	$jolietsystemid = undef;
+    }
+
+    $scdcountry = 'J';
+    &MakeISO($outprefix.'_JP.'.$isoSuffix);
+
+    if ( ! $scdhardwareDefined ) {
+	$scdhardware = undef;
+    }
+    if ( ! $pvdsystemidDefined ) {
+	$pvdsystemid = undef;
+    }
+    if ( ! $jolietsystemidDefined ) {
+	$jolietsystemid = undef;
+    }
+
+    $scdcountry = 'E';
+    &MakeISO($outprefix.'_EU.'.$isoSuffix);
+} else {
+    &MakeISO($outprefix.'.'.$isoSuffix);
+}
+
+###############################################################################
+
+sub MakeISO {
+    my ($iso) = @_;
+
+    if ( $verbosity >= 2 ) {
+	print "SCD country: $scdcountry\n";
+    }
+
+    # country based defaults if not set up
+    if ( ! defined $scdhardware ) {
+	$scdhardware = $scdcountry =~ m/U/ ? 'SEGA GENESIS' : 'SEGA MEGA DRIVE';
+    }
+    if ( ! defined $pvdsystemid ) {
+	$pvdsystemid = $scdcountry =~ m/U/ ? 'SEGA_CD' : 'MEGA_CD';
+    }
+    if ( ! defined $jolietsystemid ) {
+	$jolietsystemid = $pvdsystemid;
+    }
+
+    # how to make a sample iso for the ISO 9660 structure
+    # mkisofs -iso-level 1 -no-bak -no-pad -o a.iso files/
+
+    $isoIndex = 0;
+
+    open(ISO, ">$iso") or die "Cannot write $iso: $!\n";
+
+    binmode ISO;
+
+    if ( $verbosity >= 2 ) {
+	print "Sector 0: sega cd boot sector and some ip\n";
+    }
+
+    &PrintSegaCDSystemID();
+    &PrintSegaCDDiscID();
+
+    my $scdmakeDir = $0;
+    $scdmakeDir =~ s/([\\\/\:])[^\\\/\:]+$/$1/;
+
+    # region info, and pad so that all region take up 1412 (U is longest)
+    # makes hexdiff of iso easier to look at
+    my $propType;
+    if ( $scdcountry =~ m/U/ ) {
+	$propType = 'us';
+    } elsif ( $scdcountry =~ m/J/ ) {
+	$propType = 'jp';
+    } else {
+	$propType = 'eu';
+    }
+
+    &PrintFileToIso("${scdmakeDir}scdmake_${propType}_prop.bin");
+    if ( $ippad ) {
+	&PrintFileToIso("${scdmakeDir}scdmake_${propType}_pad.bin");
+    }
+
+    &PrintFileToIso($ipbin);
+
+    &FillIsoToEndOfSector(chr(0x00));
+
+    if ( $verbosity >= 2 ) {
+	print "Sector 1-".(&GetIsoSector()-1).": sega cd ip\n";
+    }
+
+    # TODO doesn't play nice when real small?? or when real big?? idk anymore
+    &FillIsoToIsoByte(chr(0x00),$scdspstart);
+
+    &PrintFileToIso($spbin);
+
+    &FillIsoToEndOfSector(chr(0x00));
+
+    if ( $verbosity >= 2 ) {
+	print "Sector ".int($scdspstart/$sectorSize)."-".(&GetIsoSector()-1).": sega cd sp\n";
+    }
+
+    # fill with 0x00 to the end of first 16 sectors
+
+    &FillIsoToIsoByte(chr(0x00),0x8000);
+
+    &PrintPrimaryVolumeDescriptorToIso();
+
+    if ( $verbosity >= 2 ) {
+	print "Sector 16-16: sega cd iso 9660 primvary volume descriptor\n";
+    }
+
+    if ( $joliet ) {
+	&PrintJolietSupplementraryVolumeDescriptorToIso();
+
+	if ( $verbosity >= 2 ) {
+	    print "Sector 17-17: sega cd iso 9660 joliet supplementary volume descriptor\n";
+	}
+    }
+
+    &PrintVolumeDescriptorSetTerminatorToIso();
+
+    if ( $verbosity >= 2 ) {
+	print "Sector ".(&GetIsoSector()-1)."-".(&GetIsoSector()-1).": sega cd iso 9660 volume descriptor set terminator\n";
+    }
+
+    if ( $pathTableLittleEndian ) {
+	&FillIsoToIsoSector(chr(0x00),$pathTableLittleEndian);
+
+	if ( &GetIsoSector() != $pathTableLittleEndian ) {
+	    die "Bad little endian path table start\n";
+	}
+
+	&PrintLittleEndianPathTable(0);
+
+	if ( $verbosity >= 2 ) {
+	    print "Sector $pathTableLittleEndian-".(&GetIsoSector()-1).": sega cd iso 9660 little endian path table\n";
+	}
+    }
+
+    if ( $pathTableBigEndian ) {
+	&FillIsoToIsoSector(chr(0x00),$pathTableBigEndian);
+
+	if ( &GetIsoSector() != $pathTableBigEndian ) {
+	    die "Bad big endian path table start\n";
+	}
+
+	&PrintBigEndianPathTable(0);
+
+	if ( $verbosity >= 2 ) {
+	    print "Sector $pathTableBigEndian-".(&GetIsoSector()-1).": sega cd iso 9660 big endian path table\n";
+	}
+    }
+
+    if ( $joliet ) {
+	if ( $jolietPathTableLittleEndian ) {
+	    &FillIsoToIsoSector(chr(0x00),$jolietPathTableLittleEndian);
+
+	    if ( &GetIsoSector() != $jolietPathTableLittleEndian ) {
+		die "Bad little endian path table start\n";
+	    }
+
+	    &PrintLittleEndianPathTable(1);
+
+	    if ( $verbosity >= 2 ) {
+		print "Sector $jolietPathTableLittleEndian-".(&GetIsoSector()-1).": sega cd iso 9660 joliet little endian path table\n";
+	    }
+	}
+
+	if ( $jolietPathTableBigEndian ) {
+	    &FillIsoToIsoSector(chr(0x00),$jolietPathTableBigEndian);
+
+	    if ( &GetIsoSector() != $jolietPathTableBigEndian ) {
+		die "Bad big endian path table start\n";
+	    }
+
+	    &PrintBigEndianPathTable(1);
+
+	    if ( $verbosity >= 2 ) {
+		print "Sector $jolietPathTableBigEndian-".(&GetIsoSector()-1).": sega cd iso 9660 joliet big endian path table\n";
+	    }
+	}
+    }
+
+    &FillIsoToIsoSector(chr(0x00),$rootExtent);
+
+    if ( &GetIsoSector() != $rootExtent ) {
+	die "Bad root extent table start\n";
+    }
+
+    # (non-joliet)
+    &PrintExtentTablesToIso(0);
+
+    if ( $verbosity >= 2 ) {
+	print "Sector $rootExtent-".(&GetIsoSector()-1).": sega cd iso 9660 extent tables\n";
+    }
+
+    &FillIsoToEndOfSector(chr(0x00));
+
+    if ( $joliet ) {
+	&FillIsoToIsoSector(chr(0x00),$jolietRootExtent);
+
+	if ( &GetIsoSector() != $jolietRootExtent ) {
+	    die "Bad Joliet root extent table start\n";
+	}
+
+	# (joliet)
+	&PrintExtentTablesToIso(1);
+
+	if ( $verbosity >= 2 ) {
+	    print "Sector $jolietRootExtent-".(&GetIsoSector()-1).": sega cd iso 9660 joliet extent tables\n";
+	}
+
+	&FillIsoToEndOfSector(chr(0x00));
+    }
+
+    &FillIsoToIsoSector(chr(0x00),$fileExtent);
+
+    if ( &GetIsoSector() != $fileExtent ) {
+	die "Bad file extent table start, you can change \$fileExtent in SCDMAKE.CFG to ".&GetIsoSector()."\n";
+    }
+
+    &PrintFilesToIso();
+
+    if ( $verbosity >= 2 ) {
+	print "Sector $fileExtent-".(&GetIsoSector()-1).": sega cd iso 9660 file data\n";
+    }
+
+    &FillIsoToEndOfSector(chr(0x00));
+
+    &PrintToIso(chr(0x00) x ($padSize * $sectorSize));
+
+    &FillIsoToIsoByte(chr(0x00),$sectorCount * $sectorSize);
+
+    close ISO;
+
+    if ( $isoIndex != $sectorCount * $sectorSize ) {
+	die "Too many sectors, fix sectorCount handling\n";
+    }
+
+    if ( $isoType == 1 ) {
+	my $guideText = '';
+	$guideText .= "FILE \"$iso\" BINARY\n";
+	$guideText .= "  TRACK 01 MODE1/2352\n";
+	$guideText .= "    INDEX 01 00:00:00\n";
+	my $guide = $iso;
+	$guide =~ s/\.(ISO|BIN)$/.CUE/;
+	if ( open( GUIDE, ">$guide" ) ) {
+	    print GUIDE $guideText;
+	} else {
+	    print STDERR "Could not write cue file: $guide\n";
+	}
+	close GUIDE;
+    }
+}
+
+sub PrintSegaCDSystemID {
+    if ( &GetIsoByteIndex() != 0x0000 ) {
+	die "Cannot start sega cd disc id anywhere except 0x0000\n";
+    }
+
+    # set 16 bytes to disc id
+    &PrintToIso(&PadString($scddiscid,chr(0x20),16));
+    # set 11 bytes to volume name
+    &PrintToIso(&PadString($scdvolumename,chr(0x20),11));
+    # set 1 byte to zero
+    &PrintToIso(chr(0x00));
+    # set 2 bytes to BCD of volume version (0x0100 means released)
+    &PrintBCDBigEndianDoubleByteToIso($scdvolumeversion);
+    # set 2 bytes to volume type (0x0001 means CD-ROM)
+    &PrintBigEndianDoubleByteToIso($scdvolumetype);
+    # set 11 bytes to system name
+    &PrintToIso(&PadString($scdsystemname,chr(0x20),11));
+    # set 1 byte to zero
+    &PrintToIso(chr(0x00));
+    # set 2 bytes to BCD of volume version (0x0100 means released)
+    &PrintBCDBigEndianDoubleByteToIso($scdsystemversion);
+    # set 2 bytes to zero
+    &PrintToIso(chr(0x00)x2);
+    # set 16 bytes for IP information
+    &PrintBigEndianQuadByteToIso($scdipstart);
+    &PrintBigEndianQuadByteToIso($scdipend);
+    &PrintBigEndianQuadByteToIso(0x00000000);
+    &PrintBigEndianQuadByteToIso(0x00000000);
+    # set 16 bytes for SP information
+    &PrintBigEndianQuadByteToIso($scdspstart);
+    &PrintBigEndianQuadByteToIso($scdspend);
+    &PrintBigEndianQuadByteToIso(0x00000000);
+    &PrintBigEndianQuadByteToIso(0x00000000);
+    # set 0xB0 bytes to space
+    &PrintToIso(chr(0x20)x0xB0);
+}
+
+sub PrintSegaCDDiscID {
+    if ( &GetIsoByteIndex() != 0x0100 ) {
+	die "Cannot start sega cd disc id anywhere except 0x0100\n";
+    }
+
+    # set 16 bytes to disc id
+    &PrintToIso(&PadString($scdhardware,chr(0x20),16));
+    # set 16 bytes to company code and date
+    &PrintToIso('(C)');
+    &PrintToIso(&PadString($scdcompanyname,chr(0x20),4));
+    if ( $date !~ m/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})00$/ ) {
+	die "Could not parse date: $date\n";
+    }
+    my $year = $1;
+    my $month = $2;
+    my @months = qw( JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC );
+    &PrintToIso(' ');
+    &PrintToIso($year);
+    if ( $month >= 1 && $month <= 12 ) {
+	&PrintToIso('.');
+	&PrintToIso($months[$month-1]);
+    } else {
+	&PrintToIso('    ');
+    }
+    # set 48 bytes to domestic game title
+    &PrintToIso(&PadString($scdgametitledomestic,chr(0x20),48));
+    # set 48 bytes to overseas game title
+    &PrintToIso(&PadString($scdgametitleoverseas,chr(0x20),48));
+    # set 2 bytes to disc type
+    &PrintToIso(&PadString($scddisctype,chr(0x20),2));
+    # set 10 bytes to product code
+    if ( $scdcompanyname eq 'SEGA' && $scdproductcode =~ m/^[0-9]{4}$/ ) {
+	if ( $scdcountry !~ m/U/ && $scdcountry =~ m/J/ ) {
+	    &PrintToIso(" G-$scdproductcode  -");
+	} else {
+	    &PrintToIso(" MK-$scdproductcode -");
+	}
+    } elsif ( $scdcompanyname =~ m/^T\-..$/ && $scdproductcode =~ m/^[0-9]{5}$/ ) {
+	&PrintToIso(" T-$scdproductcode -");
+    } else {
+	print STDERR "Unsupported scdcompanyname and scdproductcode: $scdcompanyname and $scdproductcode\n";
+    }
+    # set 2 bytes to product version
+    &PrintToIso(&PadString($scdproductversion,chr(0x20),2));
+    # set 2 bytes to space
+    &PrintToIso('  ');
+    # set 16 bytes to IO
+    &PrintToIso(&PadString($scdio,chr(0x20),16));
+    # set 30 bytes to space
+    &PrintToIso(chr(0x20)x30);
+    # set 10 bytes to modem
+    &PrintToIso(&PadString($scdmodem,chr(0x20),10));
+    # set 40 bytes to space
+    &PrintToIso(chr(0x20)x40);
+    # set 16 bytes to country
+    &PrintToIso(&PadString($scdcountry,chr(0x20),16));
+}
+
+sub PrintPrimaryVolumeDescriptorToIso {
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Cannot start primary volume descriptor sector on a sector offset\n";
+    }
+
+    my $space = chr(0x20);
+
+    # set 1 byte volume descriptor type to primary volume descriptor
+    &PrintByteToIso(0x01);
+    # set 6 bytes standard identifier (CD001 for ISO 9660)
+    &PrintToIso("CD001");
+    # set 1 byte to volume descriptor version
+    &PrintByteToIso(0x01);
+    # set 1 byte to zero
+    &PrintByteToIso(0x00);
+    # set 32 bytes to system identifier
+    &PrintToIso(&PadString(&CheckACharacters($pvdsystemid),$space,32));
+    # set 32 bytes to volume identifier
+    &PrintToIso(&PadString(&CheckDCharacters($pvdvolumeid),$space,32));
+    # set 8 bytes to zero
+    &PrintToIso(chr(0x00)x8);
+    # set 8 bytes as both endian double word total number of sectors
+    &PrintBothEndianQuadByteToIso($sectorCount);
+    # set 32 bytes to zero
+    &PrintToIso(chr(0x00)x32);
+    # set 4 bytes as both endian word volume set size
+    &PrintBothEndianDoubleByteToIso(0x0001);
+    # set 4 bytes as both endian word volume sequence number
+    &PrintBothEndianDoubleByteToIso(0x0001);
+    # set 4 bytes as both endian word sector size
+    &PrintBothEndianDoubleByteToIso($sectorSize);
+
+    # set 8 bytes as both double endian word path table size (already computed)
+    &PrintBothEndianQuadByteToIso($pathTableByteSize);
+    # set 4 bytes as little endian double word little endian path table
+    &PrintLittleEndianQuadByteToIso($pathTableLittleEndian);
+    # set 4 bytes as little endian double word 2nd little endian path table
+    &PrintLittleEndianQuadByteToIso(0x00000000);
+    # set 4 bytes as big endian double word big endian path table
+    &PrintBigEndianQuadByteToIso($pathTableBigEndian);
+    # set 4 bytes as big endian double word 2nd big endian path table
+    &PrintBigEndianQuadByteToIso(0x00000000);
+
+    # print root extent
+    &PrintExtentToIso($dirs{''}{'extentStart'}{0},$dirs{''}{'extentSize'}{0},chr(0x02),chr(0x00),0,0);
+
+    # set 128 bytes to volume set identifier
+    &PrintToIso(&PadString(&CheckDCharacters($pvdvolumesetid),$space,128));
+    # set 128 bytes to publisher identifier
+    &PrintToIso(&PadString(&CheckACharacters($pvdpublisherid),$space,128));
+    # set 128 bytes to data preparer identifier
+    &PrintToIso(&PadString(&CheckACharacters($pvdpreparerid),$space,128));
+    # set 128 bytes to application identifier
+    &PrintToIso(&PadString(&CheckACharacters($pvdapplicationid),$space,128));
+
+    # set 37 bytes to copyright file identifier
+    &PrintToIso(&PadString(&CheckFileName($pvdcopyrightfileid),$space,37));
+    # set 37 bytes to abstract file identifier
+    &PrintToIso(&PadString(&CheckFileName($pvdabstractfileid),$space,37));
+    # set 37 bytes to bibliographical file identifier
+    &PrintToIso(&PadString(&CheckFileName($pvdbibliographicalfileid),$space,37));
+
+    # set 17 bytes to date and time of volume creation
+    &PrintCurrentTimeVDToIso();
+    # set 17 bytes to date and time of most recent modification
+    &PrintCurrentTimeVDToIso();
+    # set 17 bytes to date and time of volume expires
+    &PrintUnspecifiedTimeVDToIso();
+    # set 17 bytes to date and time of volume is effective
+    &PrintCurrentTimeVDToIso();
+
+    # set 1 byte to 1
+    &PrintByteToIso(0x01);
+    # set 1 byte to 0
+    &PrintByteToIso(0x00);
+
+    # set 512 bytes reserved for application use
+    &PrintToIso(chr(0x00)x512);
+
+    # set 653 bytes to zeros
+    &PrintToIso(chr(0x00)x653);
+
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Did not write full sector for primary volume descriptor\n";
+    }
+}
+
+sub PrintJolietSupplementraryVolumeDescriptorToIso {
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Cannot start supplementary volume descriptor sector on a sector offset\n";
+    }
+
+    my $space = chr(0x00).chr(0x20);
+
+    # set 1 byte volume descriptor type to supplementray volume descriptor
+    &PrintByteToIso(0x02);
+    # set 6 bytes standard identifier (CD001 for ISO 9660)
+    &PrintToIso("CD001");
+    # set 1 byte to volume descriptor version
+    &PrintByteToIso(0x01);
+    # set 1 byte to volume flags
+    &PrintByteToIso(0x00);
+    # set 32 bytes to system identifier 
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietsystemid),$space,32));
+    # set 32 bytes to volume identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietvolumeid),$space,32));
+    # set 8 bytes to zero
+    &PrintToIso(chr(0x00)x8);
+    # set 8 bytes as both endian double word total number of sectors
+    &PrintBothEndianQuadByteToIso($sectorCount);
+    # set 32 bytes to escape sequences
+    &PrintToIso(&PadString(chr(0x25).chr(0x2F).chr(0x45),chr(0x00),32));
+
+    # set 4 bytes as both endian word volume set size
+    &PrintBothEndianDoubleByteToIso(0x0001);
+    # set 4 bytes as both endian word volume sequence number
+    &PrintBothEndianDoubleByteToIso(0x0001);
+    # set 4 bytes as both endian word sector size
+    &PrintBothEndianDoubleByteToIso($sectorSize);
+
+    # set 8 bytes as both double endian word path table size (already computed)
+    &PrintBothEndianQuadByteToIso($pathTableByteSize);
+    # set 4 bytes as little endian double word little endian path table
+    &PrintLittleEndianQuadByteToIso($jolietPathTableLittleEndian);
+    # set 4 bytes as little endian double word 2nd little endian path table
+    &PrintLittleEndianQuadByteToIso(0x00000000);
+    # set 4 bytes as big endian double word big endian path table
+    &PrintBigEndianQuadByteToIso($jolietPathTableBigEndian);
+    # set 4 bytes as big endian double word 2nd big endian path table
+    &PrintBigEndianQuadByteToIso(0x00000000);
+
+    # print root extent
+    &PrintExtentToIso($dirs{''}{'extentStart'}{1},$dirs{''}{'extentSize'}{1},chr(0x02),chr(0x00),0,0);
+
+    # set 128 bytes to volume set identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietvolumesetid),$space,128));
+    # set 128 bytes to publisher identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietpublisherid),$space,128));
+    # set 128 bytes to data preparer identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietpreparerid),$space,128));
+    # set 128 bytes to application identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietapplicationid),$space,128));
+
+    # set 37 bytes to copyright file identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietcopyrightfileid),$space,36).chr(0x00));
+    # set 37 bytes to abstract file identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietabstractfileid),$space,36).chr(0x00));
+    # set 37 bytes to bibliographical file identifier
+    &PrintToIso(&PadString(&CheckAsciiToUCS2($jolietbibliographicalfileid),$space,36).chr(0x00));
+
+    # set 17 bytes to date and time of volume creation
+    &PrintCurrentTimeVDToIso();
+    # set 17 bytes to date and time of most recent modification
+    &PrintCurrentTimeVDToIso();
+    # set 17 bytes to date and time of volume expires
+    &PrintUnspecifiedTimeVDToIso();
+    # set 17 bytes to date and time of volume is effective
+    &PrintCurrentTimeVDToIso();
+
+    # set 1 byte to 1
+    &PrintByteToIso(0x01);
+    # set 1 byte to 0
+    &PrintByteToIso(0x00);
+
+    # set 511 bytes reserved for application use
+    &PrintToIso(chr(0x00)x512);
+
+    # set 653 bytes to zeros
+    &PrintToIso(chr(0x00)x653);
+
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Did not write full sector for supplementray volume descriptor\n";
+    }
+}
+
+sub PrintVolumeDescriptorSetTerminatorToIso {
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Cannot start volume descriptor set terminator sector on a sector offset\n";
+    }
+
+    # set 1 byte volume descriptor type to volume descriptor set terminator
+    &PrintByteToIso(0xFF);
+    # set 6 bytes standard identifier (CD001 for ISO 9660)
+    &PrintToIso("CD001");
+    # set 1 byte to volume descriptor version
+    &PrintByteToIso(0x01);
+    # set remaining 2040 bytes to zero
+    &PrintToIso(chr(0x00)x2041);
+
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Did not write full sector for volume descriptor set terminator\n";
+    }
+}
+
+
+
+sub DeterminePathTableIndexes {
+    my $index = 1;
+    my $lastIndex;
+    my $level = 0;
+    my @dirKeys = keys %dirs;
+
+    # make pathIndex of root dir 1
+    $dirs{''}{'pathIndex'} = 1;
+
+    do {
+	$lastIndex = $index;
+
+	my @dirsAtLevel;
+	foreach my $dir (sort @dirKeys) {
+	    if ( ! exists $dirs{$dir}{'level'} ) {
+		die "Bad dir: $dir\n";
+	    }
+	    if ( $dirs{$dir}{'level'} == $level ) {
+		push @dirsAtLevel, $dir;
+	    }
+	}
+
+	foreach my $dir ( sort { $dirs{$dirs{$a}{'dirParent'}}{'pathIndex'} <=> 
+$dirs{$dirs{$b}{'dirParent'}}{'pathIndex'} || $a cmp $b } @dirsAtLevel ) {
+	    $dirs{$dir}{'pathIndex'} = $index;
+	    # TODO public = 0 may not work right... (seems to though in basic tests)
+	    next unless $dirs{$dir}{'public'} >= 2;
+	    $index++;
+	}
+
+	$level++;
+    } while ( $index > $lastIndex );
+}
+
+sub _PrintEndianPathTable_ {
+    my ($little,$big,$joliet) = @_;
+
+    if ( $little || $big ) {
+	if ( &GetIsoSectorIndex() != 0 ) {
+	    die "Cannot start path table sector on a sector offset\n";
+	}
+    }
+
+    my $count = 0;
+
+    foreach my $dir ( sort { $dirs{$a}{'pathIndex'} <=> $dirs{$b}{'pathIndex'} } keys %dirs ) {
+	next unless $dirs{$dir}{'public'} >= 2;
+	my $id;
+	if ( $dir eq '' ) {
+	    $id = chr(0x00);
+	} else {
+	    $id = $dirs{$dir}{'dirShort'};
+	}
+	if ( $little || $big ) {
+	    my $dirParent = $dirs{$dir}{'dirParent'};
+	    # set 1 byte to length of directory identifier
+	    &PrintByteToIso(length($id));
+	    # set 1 byte to extended attribute record length
+	    &PrintByteToIso(0x00);
+	    # set 4 bytes to location of extent (LBA)
+	    &_PrintEndianToIso_($little,$big,4,$dirs{$dir}{'extentStart'}{$joliet});
+	    # set 2 bytes to directory number of parent
+	    &_PrintEndianToIso_($little,$big,2,$dirs{$dirParent}{'pathIndex'});
+	    # set variable bytes to directory identifier
+	    &PrintToIso($id);
+	    # pad if not on word aligned address
+	    &FillIsoToEndOfDoubleByte(chr(0x00));
+	} else {
+	    $count += 8 + length($id);
+	    # count must be even
+	    if ( $count & 1 ) {
+		$count++;
+	    }
+	}
+    }
+
+    if ( $little || $big ) {
+	&FillIsoToEndOfSector(chr(0x00));
+    
+	if ( &GetIsoSectorIndex() != 0 ) {
+	    die "Did not write full sector for path table\n";
+	}
+    }
+
+    return $count;
+}
+
+sub PrintLittleEndianPathTable {
+    return &_PrintEndianPathTable_(1,0,@_);
+}
+
+sub PrintBigEndianPathTable {
+    return &_PrintEndianPathTable_(0,1,@_);
+}
+
+sub GetPathTableByteSize {
+    return &_PrintEndianPathTable_(0,0,@_);
+}
+
+
+
+sub DetermineFileInformationForIso {
+    if ( $isoMatch ne '' ) {
+
+	my $dir = '';
+	my $dirShort = '';
+	my $dirParent = '';
+	my $dirLevel = 0;
+
+	$dirs{$dir}{'dirShort'} = $dirShort;
+	$dirs{$dir}{'dirParent'} = $dirParent;
+	$dirs{$dir}{'level'} = $dirLevel;
+	# will be determined later
+	$dirs{$dir}{'extentStart'}{0} = 0;
+	$dirs{$dir}{'extentSize'}{0} = 0;
+	$dirs{$dir}{'extentStart'}{1} = 0;
+	$dirs{$dir}{'extentSize'}{1} = 0;
+	$dirs{$dir}{'pathIndex'} = -1;
+	$dirs{$dir}{'public'} = $isoPublicDefault;
+
+	if ( $isoMatchFileExtent < 0 ) {
+	    die "Need to specify $isoMatchFileExtent\n";
+	}
+	my $cmd = "isoinfo -l -i $isoMatch";
+	print "$cmd\n";
+	open( PIPE, "$cmd |" ) or die "Could not pipe command: $cmd\n";
+	while ( my $line = <PIPE> ) {
+	    # TODO doesn't support subdirectories
+	    # supports iso level 1 (8.3 filename) and lowercase
+	    if ( $line =~ /\[\s*([\d]+)\s+[0]+\s*\]\s*([A-Za-z][A-Za-z0-9_]{0,7}\.[A-Za-z0-9\.]{1,3});/ ) {
+		my $offset = $1 - $isoMatchFileExtent;
+		my $file = $2;
+		&AddFileInformationForIso($file,$file,uc($file),$file,'',$offset);
+	    }
+	}
+	close PIPE;
+    } else {
+	&AddDirInformationForIso('','','',cwd,'',0);
+    }
+}
+
+sub DetermineSCDMakeIncFileInformationForIso {
+    # set public default to at least hidden since these are required files
+    my $isoPublicDefaultBackup = $isoPublicDefault;
+    if ( $isoPublicDefault < 1 ) {
+	$isoPublicDefault = 1;
+    }
+
+    foreach my $file (@scdmakeinc) {
+	my $fileShortCased = $file;
+	my $dir = '';
+	if ( $file =~ /^(.*[\\\/\:])([^\\\/\:]+)$/ ) {
+	    $dir = $1;
+	    $fileShortCased = $2;
+	}
+	# TODO fileReal is wrong for non Linux
+	my $fileReal = $file;
+	my $fileShort = uc($fileShortCased);
+	
+	&AddFileInformationForIso($file,$fileShortCased,$fileShort,$fileReal,$dir,$fileExtentCurrentOffset);
+    }
+
+    # revert public default
+    $isoPublicDefault = $isoPublicDefaultBackup;
+}
+
+sub AddDirInformationForIso {
+    my ($dir,$dirShortCased,$dirShort,$dirReal,$dirParent,$dirLevel) = @_;
+    if ( &IsGoodDirNameShort($dirShort) ) {
+	# SCDMAKE.INC may add $dirs{$dir}{'contents'} entries already
+	# but if 'level' not defined, than define these now
+	if ( ! exists $dirs{$dir} ||
+	     ! exists $dirs{$dir}{'level'} ) {
+	    $dirs{$dir}{'dirShort'} = $dirShort;
+	    $dirs{$dir}{'dirShortCased'} = $dirShortCased;
+	    $dirs{$dir}{'dirParent'} = $dirParent;
+	    $dirs{$dir}{'level'} = $dirLevel;
+	    # will be determined later
+	    $dirs{$dir}{'extentStart'}{0} = 0;
+	    $dirs{$dir}{'extentSize'}{0} = 0;
+	    $dirs{$dir}{'extentStart'}{1} = 0;
+	    $dirs{$dir}{'extentSize'}{1} = 0;
+	    $dirs{$dir}{'pathIndex'} = -1;
+	    $dirs{$dir}{'public'} = $isoPublicDefault;
+	}
+	# might make fake directories, so real directory does not need to exist
+	if ( -d $dirReal ) {
+	    opendir( my $dh, $dirReal );
+	    my @fileShortCaseds = readdir($dh);
+	    foreach my $fileShortCased (sort @fileShortCaseds) {
+		next if $fileShortCased eq '.';
+		next if $fileShortCased eq '..';
+		next if $fileShortCased eq '.svn';
+		my $fileShort = uc($fileShortCased);
+		my $fileReal = File::Spec->catfile($dirReal,$fileShortCased);
+		my $file = $dir . $fileShort;
+		if ( &IsDesiredLocalFile($file) ) {
+		    if ( -d $fileReal ) {
+			my $subdir = $file . '/';
+			$dirs{$dir}{'contents'}{$subdir} = 1;
+			&AddDirInformationForIso($subdir,$fileShortCased,$fileShort,$fileReal,$dir,$dirLevel+1);
+		    } else {
+			&AddFileInformationForIso($file,$fileShortCased,$fileShort,$fileReal,$dir,-1);
+		    }
+		}
+	    }
+	    closedir $dh;
+	}
+    }
+}
+
+sub AddFileInformationForIso {
+    my ($file,$fileShortCased,$fileShort,$fileReal,$dir,$offset) = @_;
+    if ( &IsGoodFileName($file) ) {
+	my $sizeBytes = 0;
+	my $sizeSectors = 0;
+	if ( ! -e $fileReal ) {
+	    if ( $verbosity >= 2 ) {
+		print STDERR "treating $fileReal as empty file since could not find the file\n";
+	    }
+	} else {
+	    $sizeBytes = -s $fileReal;
+	    $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
+	}
+
+	if ( ! exists $files{$file} ) {
+	    $dirs{$dir}{'contents'}{$file} = 1;
+
+	    $files{$file}{'dir'} = $dir;
+	    $files{$file}{'fileShort'}{0} = $fileShort;
+	    $files{$file}{'fileShort'}{1} = $fileShortCased;
+	    $files{$file}{'fileReal'} = $fileReal;
+	    $files{$file}{'sizeBytes'} = $sizeBytes;
+	    $files{$file}{'sizeSectors'} = $sizeSectors;
+	    $files{$file}{'offset'} = $offset;
+	    $files{$file}{'public'} = $isoPublicDefault;
+	} else {
+	    if ( $files{$file}{'offset'} < 0 ) {
+		$files{$file}{'offset'} = $offset;
+	    }
+	    if ( $files{$file}{'public'} < $isoPublicDefault ) {
+		$files{$file}{'public'} = $isoPublicDefault;
+	    }
+	}
+
+	if ( $offset >= 0 &&
+	     $sizeSectors > 0 &&
+	     $fileExtentCurrentOffset < $offset + $sizeSectors ) {
+	    $fileExtentCurrentOffset = $offset + $sizeSectors;
+	}
+    }
+}
+
+sub IsDesiredLocalFile {
+    my ($file) = @_;
+    # the current ISO or BIN/CUE should not be used
+    # temporary editor files should not be used
+    return ( ! ( $isoType == 0 && $file =~ m/^$outprefix(|_US|_EU|_JP)\.ISO$/i ) &&
+	     ! ( $isoType == 1 && $file =~ m/^$outprefix(|_US|_EU|_JP)\.(BIN|CUE)$/i ) &&
+	     $file !~ m/[\#~]$/i );
+}
+
+sub PlaceUnplacedFiles {
+    # same order as path tables / extent tables
+    foreach my $dir ( sort { $dirs{$a}{'pathIndex'} <=> $dirs{$b}{'pathIndex'} } keys %dirs ) {
+	# files and subdirs
+	foreach my $file ( sort keys %{$dirs{$dir}{'contents'}} ) {
+	    if ( exists $files{$file} ) {
+		if ( $files{$file}{'public'} >= 1 ) {
+		    if ( $files{$file}{'offset'} < 0 ) {
+			# update size information since may have been modified by this script
+			# (such as SCDMAKE.INC)
+			my $fileReal = $files{$file}{'fileReal'};
+			my $sizeBytes = 0;
+			my $sizeSectors = 0;
+			if ( ! -e $fileReal ) {
+			    print STDERR "treating $fileReal as empty file since could not find the file\n";
+			} else {
+			    $sizeBytes = -s $fileReal;
+			    $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
+			}
+
+			$files{$file}{'sizeBytes'} = $sizeBytes;
+			$files{$file}{'sizeSectors'} = $sizeSectors;
+
+			$files{$file}{'offset'} = $fileExtentCurrentOffset;
+
+			$fileExtentCurrentOffset += $files{$file}{'sizeSectors'};
+		    }
+		}
+	    }
+	}
+    }
+}
+
+
+sub GetExtentTablesSectorSize {
+    my ($joliet) = @_;
+    my $extent = $joliet ? $jolietRootExtent : $rootExtent;
+    my $count = 0;
+
+    foreach my $dir ( sort { $dirs{$a}{'pathIndex'} <=> $dirs{$b}{'pathIndex'} } keys %dirs ) {
+	my $sizeBytes = 0;
+	# . directory (0x00)
+	$sizeBytes += &GetExtentLength(chr(0x00),0,0);
+	# .. directory (0x01)
+	$sizeBytes += &GetExtentLength(chr(0x01),0,0);
+	# files and subdirs
+	foreach my $file ( sort keys %{$dirs{$dir}{'contents'}} ) {
+	    my $bytes;
+	    $bytes = &GetExtentLength($files{$file}{'fileShort'}{$joliet},1,$joliet);
+
+	    # cannot have entry that crosses sector boundary
+	    my $remainBytesInSector = $sectorSize - ( $sizeBytes % $sectorSize );
+	    if ( $remainBytesInSector < $bytes ) {
+		$sizeBytes += $remainBytesInSector;
+	    }
+
+	    $sizeBytes += $bytes;
+	}
+
+	my $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
+
+	$dirs{$dir}{'extentStart'}{$joliet} = $extent + $count;
+	$dirs{$dir}{'extentSize'}{$joliet} = $sizeSectors * $sectorSize;
+
+	$count += $sizeSectors;
+    }
+
+    return $count;
+}
+
+sub GetExtentLength {
+    my ($identifier,$fileVersion,$joliet) = @_;
+
+    if ( $identifier eq chr(0x00) ||
+	 $identifier eq chr(0x01) ) {
+	# joliet does not use UCS2 characters for . and .. directories
+	$joliet = 0;
+    }
+
+    my $length = 0x21 + length($identifier) * ( $joliet ? 2 : 1 );
+
+    if ( ! $joliet && $fileVersion >= 1 ) {
+	# 2 bytes for SEPARATOR2 (;) and file version (assuming it is one digit)
+	$length += 2;
+    }
+
+    # make sure length is even (which includes padding)
+    if ( $length % 2 ) {
+	$length++;
+    }
+
+    return $length;
+}
+
+sub PrintExtentTablesToIso {
+    my ($joliet) = @_;
+
+    # same order as path tables
+    foreach my $dir ( sort { $dirs{$a}{'pathIndex'} <=> $dirs{$b}{'pathIndex'} } keys %dirs ) {
+
+	if ( &GetIsoSectorIndex() != 0 ) {
+	    die "Cannot start path table sector on a sector offset\n";
+	}
+
+	my $dirParent = $dirs{$dir}{'dirParent'};
+
+	# . directory
+	&PrintExtentToIso($dirs{$dir}{'extentStart'}{$joliet},$dirs{$dir}{'extentSize'}{$joliet},chr(0x02),chr(0x00),0,$joliet);
+
+	# .. directory
+	&PrintExtentToIso($dirs{$dirParent}{'extentStart'}{$joliet},$dirs{$dirParent}{'extentSize'}{$joliet},chr(0x02),chr(0x01),0,$joliet);
+
+	# files and subdirs
+	foreach my $file ( sort keys %{$dirs{$dir}{'contents'}} ) {
+	    if ( exists $dirs{$file} && exists $files{$file} ) {
+		die "Cannot have $file as both dir and file\n";
+	    } elsif ( exists $dirs{$file} ) {
+		if ( $dirs{$file}{'public'} >= 2 ) {
+		    if ( $joliet ) {
+			&PrintExtentToIso($dirs{$file}{'extentStart'}{$joliet},$dirs{$file}{'extentSize'}{$joliet},chr(0x02),$dirs{$dir}{'dirShortCased'},0,$joliet);
+		    } else {
+			&PrintExtentToIso($dirs{$file}{'extentStart'}{$joliet},$dirs{$file}{'extentSize'}{$joliet},chr(0x02),$dirs{$dir}{'dirShort'},0,$joliet);
+		    }
+		}
+	    } elsif ( exists $files{$file} ) {
+		if ( $files{$file}{'public'} >= 2 ) {
+		    my $fileStart = $fileExtent + $files{$file}{'offset'};
+		    my $fileSizeBytes = $files{$file}{'sizeBytes'};
+		    # empty files have no data, so just set to zero sector
+		    if ( $fileSizeBytes <= 0 ) {
+			$fileStart = 0;
+		    }
+		    &PrintExtentToIso($fileStart,$fileSizeBytes,chr(0x00),$files{$file}{'fileShort'}{$joliet},1,$joliet);
+		}
+	    } else {
+		die "File $file is not mapped\n";
+	    }
+
+	}
+
+	&FillIsoToEndOfSector(chr(0x00));
+    
+	if ( &GetIsoSectorIndex() != 0 ) {
+	    die "Cannot start path table sector on a sector offset\n";
+	}
+    }
+}
+
+sub PrintExtentToIso {
+    my ($extent,$size,$flags,$identifier,$fileVersion,$joliet) = @_;
+
+    if ( &GetIsoByteIndex() % 2 ) {
+	die "Cannot have extent start on odd address\n";
+    }
+
+    my $length = &GetExtentLength($identifier,$fileVersion,$joliet);
+
+    if ( $joliet && $identifier ne chr(0x00) && $identifier ne chr(0x01) ) {
+	$identifier = &CheckAsciiToUCS2($identifier);
+    }
+
+    if ( ! $joliet && $fileVersion >= 1 ) {
+	$identifier .= ';' . $fileVersion;
+    }
+
+    my $identifierLength = length($identifier);
+
+    if ( $length > 255 ) {
+	die "File identifier too long: $identifier\n";
+    }
+
+    if ( &GetBytesRemainingInIsoSector() < $length ) {
+	&FillIsoToEndOfSector(chr(0x00));
+    }
+
+    my $isoIndexStart = &GetIsoByteIndex();
+
+    # set 1 byte to length of directory record
+    &PrintToIso(chr($length));
+    # set 1 byte to extended attribute record length
+    &PrintByteToIso(0x00);
+    # set 8 bytes to location of extent (LBA)
+    &PrintBothEndianQuadByteToIso($extent);
+    # set 8 bytes to data length of extent
+    &PrintBothEndianQuadByteToIso($size);
+    # set 7 bytes to extent date and time
+    &PrintToIso($dateExtent);
+    # set 1 byte to file flags
+    &PrintToIso($flags);
+    # set 1 byte to file unit size in interleaved mode
+    &PrintByteToIso(0x00);
+    # set 1 byte to interleave gap size
+    &PrintByteToIso(0x00);
+    # set 4 bytes to both endian word volume sequence number
+    &PrintBothEndianDoubleByteToIso(0x0001);
+    # set 1 byte to length of file indentifier
+    &PrintByteToIso($identifierLength);
+    # set 1 byte to file indentifier
+    &PrintToIso($identifier);
+    # pad if not on word aligned address
+    &FillIsoToEndOfDoubleByte(chr(0x00));
+
+    if ( $isoIndexStart + $length != &GetIsoByteIndex() ) {
+	die "Bad expected length of extent for: \"$identifier\"\n";
+    }
+}
+
+
+
+sub PrintFilesToIso {
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Cannot start path table sector on a sector offset\n";
+    }
+
+    # sort by files by location (offset)
+    foreach my $file ( sort { $files{$a}{'offset'} <=> $files{$b}{'offset'} || $a cmp $b } keys %files ) {
+	my $fileReal = $files{$file}{'fileReal'};
+	my $fileStart = $fileExtent + $files{$file}{'offset'};
+	my $fileSizeBytes = $files{$file}{'sizeBytes'};
+	my $fileSizeSectors = $files{$file}{'sizeSectors'};
+
+	next if $fileSizeSectors <= 0;
+	next unless $files{$file}{'public'} >= 1;
+
+	&FillIsoToIsoSector(chr(0x00),$fileStart);
+
+	if ( $fileStart*$sectorSize != &GetIsoByteIndex() ) {
+	    die "Bad ISO location to put file from extent: $file\n";
+	}
+
+	&PrintFileToIso($fileReal);
+
+	if ( $fileStart*$sectorSize+$fileSizeBytes != &GetIsoByteIndex() ) {
+	    die "Bad ISO location to finish: $file\n";
+	}
+
+	# if empty files are treated as one sector, then need to fake some data
+	if ( $fileSizeBytes <= 0 && $fileSizeSectors > 0 ) {
+	    &PrintToIso(chr(0xFF));
+	}
+
+	# sega cd dev manual says to fill with 0xFF
+	# sonic cd fills with 0x00
+	if ( $fillUnusedFileWithZero ) {
+	    &FillIsoToEndOfSector(chr(0x00));
+	} else {
+	    &FillIsoToEndOfSector(chr(0xFF));
+	}
+
+	if ( ($fileStart+$fileSizeSectors)*$sectorSize != &GetIsoByteIndex() ) {
+	    die "Bad ISO location to finish sector: $file\n";
+	}
+
+	if ( $verbosity >= 2 ) {
+	    print "Sector $fileStart-".(&GetIsoSector()-1).": sega cd iso 9660 file data: $file\n";
+	}
+
+	if ( &GetIsoSectorIndex() != 0 ) {
+	    die "Cannot start path table sector on a sector offset\n";
+	}
+    }
+
+    if ( &GetIsoSectorIndex() != 0 ) {
+	die "Cannot start path table sector on a sector offset\n";
+    }
+}
+
+sub PrintFileToIso {
+    my ($file) = @_;
+
+    # if can't open, calling routine should still check on where ISO pointer
+    # ends up
+    if ( open(FILE, $file) ) {
+	binmode FILE;
+
+	my $fileBuffer;
+	while (1) {
+	    my $result = read(FILE,$fileBuffer,$sectorSize);
+	    if ( ! $result ) {
+		last;
+	    }
+	    &PrintToIso($fileBuffer);
+	}
+    }
+
+    close FILE;
+}
+
+
+
+sub SetPublic {
+    my ($file,$public) = @_;
+    if ( exists $files{$file} ) {
+	$files{$file}{'public'} = $public;
+    }
+    if ( exists $dirs{$file} ) {
+	$dirs{$file}{'public'} = $public;
+	foreach my $file (keys %{$dirs{$file}{'contents'}}) {
+	    &SetPublic($file,$public);
+	}
+    }
+}
+
+sub NumberOfSectorsForSize {
+    my ($size) = @_;
+    return 1 + int( ( $size - 1 ) / $sectorSize );
+}
+
+sub _PadString_ {
+    my ($str,$pad,$strLengthDesired,$padLeft) = @_;
+    if ( length($str) > $strLengthDesired ) {
+	die "String before padding already too long: \"$str\"\n";
+    }
+    my $strLength = length($str);
+    my $fill = $strLengthDesired - $strLength;
+    if ( $fill < 0 ) {
+	die "$str already too long\n";
+    }
+    if ( $fill ) {
+	my $padLength = length($pad);
+	if ( $padLength > 1 && ( $fill % $padLength ) != 0 ) {
+	    die "The space to fill string is not even with pad: \"$str\" \"$pad\"\n";
+	}
+	if ( $padLeft ) {
+	    $str = ( $pad x ( $fill / $padLength ) ) . $str;
+	} else {
+	    $str = $str . ( $pad x ( $fill / $padLength ) );
+	}
+    }
+    return $str;
+}
+
+sub PadString {
+    my ($str,$pad,$strLengthDesired) = @_;
+    return &_PadString_($str,$pad,$strLengthDesired,0);
+}
+sub PadStringLeft {
+    my ($str,$pad,$strLengthDesired) = @_;
+    return &_PadString_($str,$pad,$strLengthDesired,1);
+}
+
+sub CheckACharacters {
+    my ($str) = @_;
+    if ( ! defined $str ||
+	 $str !~ m/^[\x20-\x22\x25-\x3F\x41-\x5A\x5F]*$/ ) {
+	die "Bad A character string: $str\n";
+    }
+    return $str;
+}
+
+sub CheckDCharacters {
+    my ($str) = @_;
+    if ( ! defined $str ||
+	 $str !~ m/^[\x30-\x39\x41-\x5A\x5F]*$/ ) {
+	die "Bad D character string: $str\n";
+    }
+    return $str;
+}
+
+sub CheckAsciiToUCS2 {
+    my ($str) = @_;
+    if ( ! defined $str ||
+	 $str =~ m/[\x00-\x1F\x2A\x2F\x3A\x3B\x3F\x5C]/ ) {
+	die "Bad Ascii character for Ascii -> UCS2: \"$str\"\n";
+    }
+    my $result = '';
+    my $strLength = length($str);
+    for ( my $i = 0; $i < $strLength; $i++ ) {
+	$result .= chr(0x00).substr($str,$i,1);
+    }
+    return $result;
+}
+
+sub IsGoodDirNameShort {
+    my ($str) = @_;
+    return ( defined $str &&
+	     ( $str eq '' ||
+	       ( ! $isoForceLevel1 &&
+		 # TODO still too strict I think
+		 $str =~ m/^[A-Z0-9_]*$/ ) ||
+	       ( $isoForceLevel1 &&
+		 $str =~ m/^[A-Z0-9_]{1,8}$/ ) ) );
+}
+
+sub IsGoodFileNameShort {
+    my ($str) = @_;
+    return ( defined $str &&
+	     ( $str eq '' ||
+	       ( ! $isoForceLevel1 &&
+		 # TODO still too strict I think
+		 $str =~ m/^([A-Z0-9_]*\.[A-Z0-9\.]{1,3})$/ ) ||
+	       ( $isoForceLevel1 &&
+		 $str =~ m/^([A-Z0-9_]{0,8}\.[A-Z0-9]{1,3})$/ ) ) );
+}
+
+sub IsGoodFileName {
+    my ($str) = @_;
+    return ( defined $str &&
+	     ( $str eq '' ||
+	       ( ! $isoForceLevel1 &&
+		 # TODO still too strict I think
+		 $str =~ m/^([A-Z][A-Z0-9]*[\/]){0,7}([A-Z][A-Z0-9_]*\.[A-Z0-9\.]{1,3})$/ ) ||
+	       ( $isoForceLevel1 &&
+		 # TODO is directory limit correct, didn't think hard on this for now...
+		 $str =~ m/^([A-Z][A-Z0-9]{0,7}[\/]){0,7}([A-Z][A-Z0-9_]{0,7}\.[A-Z0-9\.]{1,3})$/ ) ) );
+}
+
+sub CheckFileNameShort {
+    my ($str) = @_;
+    if ( ! &IsGoodFileNameShort($str) ) {
+	die "Bad filename (short) string: $str\n";
+    }
+    return $str;
+}
+
+sub CheckFileName {
+    my ($str) = @_;
+    if ( ! &IsGoodFileName($str) ) {
+	die "Bad filename string: $str\n";
+    }
+    return $str;
+}
+
+sub PrintToIso {
+    foreach my $buffer (@_) {
+	my $bufferLength = length($buffer);
+	if ( $bufferLength > 0 ) {
+	    $isoBuffer .= $buffer;
+	    $isoIndex += $bufferLength;
+	    $isoBufferLength += $bufferLength;
+	    while ( $isoBufferLength >= $sectorSize ) {
+		# extract one iso sector data
+		my $isoData = substr($isoBuffer,0,$sectorSize);
+		# remove sector from iso buffer and iso buffer length
+		$isoBuffer = substr($isoBuffer,$sectorSize);
+		my $min = &GetIsoBufferStartSectorMinute();
+		my $sec = &GetIsoBufferStartSectorSecond();
+		my $frac = &GetIsoBufferStartSectorFraction();
+		$isoBufferLength -= $sectorSize;
+		if ( $isoType == 0 ) {
+		    print ISO $isoData;
+		} elsif ( $isoType == 1 ) {
+		    my $data = '';
+		    # sync field (12 bytes)
+		    $data .= chr(0x00).(chr(0xFF) x 10).chr(0x00);
+		    # sector address (3 bytes)
+		    # start at second 2 (150 sectors in) (for pregap)
+		    $data .= &BCDByte($min).&BCDByte(2+$sec).&BCDByte($frac);
+		    # sector mode (1 byte)
+		    $data .= chr(0x01);
+		    # User Data (2048 bytes)
+		    $data .= $isoData;
+		    # EDC (4 bytes)
+		    $data .= &EDC($data);
+		    # Intermediate (8 bytes)
+		    $data .= (chr(0x00) x 8);
+		    # P-Parity (172 bytes)
+		    # TODO &PParity(substr($data,12,2064));
+		    $data .= (chr(0x00) x 172);
+		    # Q-Parity (104 bytes)
+		    # TODO not started yet
+		    $data .= (chr(0x00) x 104);
+		    if ( length($data) != 2352 ) {
+			die "Bad sector data\n";
+		    }
+		    # now push the sector data
+		    print ISO $data;
+		} else {
+		    die "Bad isoType: $isoType\n";
+		}
+	    }
+	}
+    }
+}
+
+# edcTable only used by &EDC to cache the 256 possible XOR values for EDC
+my @edcTable;
+
+sub EDC {
+    my ($data) = @_;
+    my $results = 0;
+    # p(x) = (x^16 + x^15+x^2 + 1).(x^16+x^2+x+1)
+    my $poly = 0x8001801b;
+    if ( $#edcTable != 0 ) {
+	for ( my $index = 0; $index < 256; $index++ ) {
+	    my $sum = 0;
+	    my $value = $index;
+	    my $reg = $index << 24;
+	    for ( my $bit = 0; $bit < 8; $bit++ ) {
+		if ( $reg & 0x80000000 ) {
+		    $reg = ( $reg << 1 ) ^ $poly;
+		} else {
+		    $reg = ( $reg << 1 );
+		}
+		$value = $value << 1;
+	    }
+	    $edcTable[$index] = $reg;
+	}
+    }
+    my $reg = 0;
+    my $limit = length($data);
+    for ( my $i = 0; $i < $limit + 4; $i++ ) {
+	my $top = (($reg >> 24) & 0xFF);
+	my $chrToXor = 0;
+	if ( $i < $limit ) {
+	    $chrToXor = &SwitchByteValue(ord(substr($data,$i,1)));
+	}
+	$reg = ( $reg << 8 ) ^ $chrToXor ^ $edcTable[$top];
+    }
+    return
+	chr(&SwitchByteValue($reg >> 24)).
+	chr(&SwitchByteValue($reg >> 16)).
+	chr(&SwitchByteValue($reg >>  8)).
+	chr(&SwitchByteValue($reg      ));
+}
+
+sub SwitchByteValue {
+    my $byte = shift @_;
+    return ( ( ( ( $byte >> 0 ) & 1 ) << 7 ) |
+	     ( ( ( $byte >> 1 ) & 1 ) << 6 ) |
+	     ( ( ( $byte >> 2 ) & 1 ) << 5 ) |
+	     ( ( ( $byte >> 3 ) & 1 ) << 4 ) |
+	     ( ( ( $byte >> 4 ) & 1 ) << 3 ) |
+	     ( ( ( $byte >> 5 ) & 1 ) << 2 ) |
+	     ( ( ( $byte >> 6 ) & 1 ) << 1 ) |
+	     ( ( ( $byte >> 7 ) & 1 )      ) );
+}
+
+sub PrintCurrentTimeVDToIso {
+    # used -u to date so we set timezone to 0x00
+    &PrintToIso($date.chr(0x00));
+}
+
+sub PrintUnspecifiedTimeVDToIso {
+    # used -u to date so we set timezone to 0x00
+    &PrintToIso(('0'x16).chr(0x00));
+}
+
+sub _PrintEndianToIso_ {
+    my $little = shift @_;
+    my $big = shift @_;
+    my $size = shift @_;
+    my @data;
+    foreach my $number (@_) {
+	my @littleEndian;
+	my $buffer = '';
+	my $numberShifted = $number;
+	for ( my $i = 0; $i < $size; $i++ ) {
+	    $littleEndian[$i] = chr( $numberShifted & 0xFF );
+	    $numberShifted = $numberShifted >> 8;
+	}
+	if ( $little ) {
+	    for ( my $i = 0; $i < $size; $i++ ) {
+		$buffer .= $littleEndian[$i];
+	    }
+	}
+	if ( $big ) {
+	    for ( my $i = $size - 1; $i >= 0; $i-- ) {
+		$buffer .= $littleEndian[$i];
+	    }
+	}
+	push @data, $buffer;
+    }
+    return &PrintToIso(@data);
+}
+
+sub PrintBothEndianQuadByteToIso {
+    return &_PrintEndianToIso_(1,1,4,@_);
+}
+sub PrintLittleEndianQuadByteToIso {
+    return &_PrintEndianToIso_(1,0,4,@_);
+}
+sub PrintBigEndianQuadByteToIso {
+    return &_PrintEndianToIso_(0,1,4,@_);
+}
+sub PrintBothEndianDoubleByteToIso {
+    return &_PrintEndianToIso_(1,1,2,@_);
+}
+sub PrintLittleEndianDoubleByteToIso {
+    return &_PrintEndianToIso_(1,0,2,@_);
+}
+sub PrintBigEndianDoubleByteToIso {
+    return &_PrintEndianToIso_(0,1,2,@_);
+}
+
+sub BCDByte {
+    my $number = shift @_;
+    my $bcdByteValue = $number % 100;
+    my $lo = $bcdByteValue % 10;
+    my $hi = int( $bcdByteValue / 10 );
+    return chr( $hi * 16 + $lo );
+}
+
+sub _PrintBCDBigEndianToIso_ {
+    my $size = shift @_;
+    my @data;
+    foreach my $number (@_) {
+	my $buffer = '';
+	for ( my $i = 0; $i < $size; $i++ ) {
+	    $buffer .= &BCDByte(int($number/(10**(2*($size-$i-1)))) % 100);
+	}
+	push @data, $buffer;
+    }
+    return &PrintToIso(@data);
+}
+
+sub PrintBCDBigEndianDoubleByteToIso {
+    return &_PrintBCDBigEndianToIso_(2,@_);
+}
+
+sub PrintByteToIso {
+    my @data;
+    foreach my $number (@_) {
+	push @data, chr($number & 0xFF);
+    }
+    return &PrintToIso(@data);
+}
+
+sub FillIsoToIsoSector {
+    my ($pad,$isoSectorDesired) = @_;
+    return &FillIsoToIsoByte($pad,$isoSectorDesired*$sectorSize);
+}
+
+sub FillIsoToIsoByte {
+    my ($pad,$isoByteDesired) = @_;
+    my $fill = $isoByteDesired - &GetIsoByteIndex();
+    if ( $fill % length($pad) ) {
+	die "Cannot fill: \"$pad\"\n";
+    }
+    if ( $fill ) {
+	&PrintToIso( ( $pad x ( $fill / length($pad) ) ) );
+    }
+}
+
+sub GetIsoByteIndex {
+    return $isoIndex;
+}
+
+sub GetIsoBufferStartByteIndex {
+    return $isoIndex - $isoBufferLength;
+}
+
+sub GetIsoSectorIndex {
+    return &GetIsoByteIndex() % $sectorSize;
+}
+
+sub GetBytesRemainingInIsoSector {
+    return $sectorSize - ( &GetIsoByteIndex() % $sectorSize );
+}
+
+sub GetIsoSector {
+    return int( &GetIsoByteIndex() / $sectorSize );
+}
+
+sub GetIsoBufferStartSector {
+    return int( &GetIsoBufferStartByteIndex() / $sectorSize );
+}
+
+sub GetIsoBufferStartSectorMinute {
+    return int( &GetIsoBufferStartSector() / ( 75 * 60 ) );
+}
+
+sub GetIsoBufferStartSectorSecond {
+    return int( &GetIsoBufferStartSector() / 75 ) % 60;
+}
+
+sub GetIsoBufferStartSectorFraction {
+    return &GetIsoBufferStartSector() % 75;
+}
+
+sub _FillIsoToEndOfBoundary_ {
+    my ($boundary,$pad) = @_;
+    my $indexInBoundary = &GetIsoByteIndex() % $boundary;
+    if ( $indexInBoundary ) {
+	my $fill = $boundary - $indexInBoundary;
+	if ( $fill % length($pad) ) {
+	    die "Cannot fill with character string of length != 1: \"$pad\"\n";
+	}
+	&PrintToIso( ( $pad x ( $fill / length($pad) ) ) );
+    }
+}
+
+sub FillIsoToEndOfSector {
+    return &_FillIsoToEndOfBoundary_($sectorSize,@_);
+}
+sub FillIsoToEndOfDoubleByte {
+    return &_FillIsoToEndOfBoundary_(2,@_);
+}
+
+sub EnsureFileSizeIsWithinBounds {
+    my ($file,$lower,$upper) = @_;
+    my $fileSize = 0;
+    if ( -e $file ) {
+	$fileSize = -s $file;
+    }
+    if ( $fileSize < $lower || $fileSize > $upper ) {
+	print "File size is bad: $file: $lower <= $fileSize <= $upper\n";
+    }
+}
+

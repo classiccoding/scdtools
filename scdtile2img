@@ -1,0 +1,498 @@
+#!/usr/bin/env perl
+###############################################################################
+# convert data from megadrive/megacd to images
+###############################################################################
+
+# TODO more verbosity...
+
+use strict;
+use warnings;
+
+sub Help {
+    die "\nscdtile2img [-palfile=<file>] [-paloffset=<#>] [-palbyteoffset=<#>] [-map] [-palmapcinepak=<file>] [-width=<#>] [-height=<#>] [-aspect320x240] [-aspect256x240] [-aspect320x224] [-aspect256x224] [-pngcrush] [-notransparency] [-background] [-imgfile=<file>] [-tileoffset=<#>] [-tilebyteoffset=<#>] [-tilecount=<#>] [-v=<#>] <tilefiles...>\n\n";
+}
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $verbosity = 2;
+
+my $paletteFile = '';
+my $paletteOffset = 0;
+my $paletteMapCinepakFile = '';
+
+my $map = 0;
+
+my $imgWidth = 0;
+my $imgHeight = 0;
+
+my @tileFiles;
+my $tileOffset = 0;
+my $tileCount = 0;
+
+my $pngcrush = 0;
+my $trans = 1;
+
+my $background = 0;
+my $pngSRGB = 0;
+
+my $imgFile = '';
+
+my $aspectX = 0;
+my $aspectY = 0;
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-palfile=(.+)$/i ) {
+	$paletteFile = $1;
+    } elsif ( $arg =~ /^-palbyteoffset=(\d+)/i ) {
+	$paletteOffset = $1;
+    } elsif ( $arg =~ /^-paloffset=(\d+)$/i ) {
+	$paletteOffset = 32 * $1;
+    } elsif ( $arg =~ /^-palmapcinepak=(.+)$/i ) {
+	$paletteMapCinepakFile = $1;
+    } elsif ( $arg =~ /^-map$/i ) {
+	$map = 1;
+    } elsif ( $arg =~ /^-width=(\d+)$/i ) {
+	$imgWidth = $1;
+    } elsif ( $arg =~ /^-height=(\d+)$/i ) {
+	$imgHeight = $1;
+    } elsif ( $arg =~ /^-aspect320x240$/i ) {
+	$aspectX = 320;
+	$aspectY = 240;
+    } elsif ( $arg =~ /^-aspect256x240$/i ) {
+	$aspectX = 256;
+	$aspectY = 240;
+    } elsif ( $arg =~ /^-aspect320x224$/i ) {
+	$aspectX = 320;
+	$aspectY = 224;
+    } elsif ( $arg =~ /^-aspect256x224$/i ) {
+	$aspectX = 256;
+	$aspectY = 224;
+    } elsif ( $arg =~ /^-pngcrush$/i ) {
+	$pngcrush = 1;
+    } elsif ( $arg =~ /^-notransparency$/i ) {
+	$trans = 0;
+    } elsif ( $arg =~ /^-background$/i ) {
+	$background = 1;
+    } elsif ( $arg =~ /^-tilebyteoffset=(\d+)$/i ) {
+	$tileOffset = $1;
+    } elsif ( $arg =~ /^-tileoffset=(\d+)$/i ) {
+	$tileOffset = 32 * $1;
+    } elsif ( $arg =~ /^-tilecount=(\d+)$/i ) {
+	$tileCount = $1;
+    } elsif ( -e $arg ) {
+	push @tileFiles, $arg;
+    } elsif ( $arg =~ /^-imgfile=(.+)$/i ) {
+	$imgFile = $1;
+    } elsif ( $arg =~ /^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( ! -e $paletteFile || $#tileFiles < 0 ) {
+    print STDERR "\nNeed to specify -palfile and at least one img file\n";
+    &Help();
+}
+
+my $paletteData = &ReadPalette();
+my $paletteMapCinepak = &ReadPaletteMapCinepak();
+
+foreach my $tileFile (@tileFiles) {
+    &Tile2Img($tileFile);
+}
+
+
+###############################################################################
+
+
+sub Tile2Img {
+   my $tileFile = shift @_;
+
+    my $tileLabel = $tileFile;
+    $tileLabel =~ s/\.(.*)$//g;
+    my $suffix = $1;
+
+    if ( $imgFile eq '' ) {
+	if ( $suffix ne uc($suffix) ) {
+	    $imgFile = "$tileLabel.png";
+	} else {
+	    $imgFile = "$tileLabel.PNG";
+	}
+    }
+
+    my $tileData = &ReadTile($tileFile);
+    my $tileDataLength = length($tileData);
+
+    my $width;
+    my $height;
+
+    if ( $imgWidth ) {
+	$width = $imgWidth;
+	$height = $tileDataLength*2/$width;
+	if ( $height % 8 ) {
+	    $height = 8 * ( 1 + int( $height / 8 ) );
+	}
+    } elsif ( $imgHeight ) {
+	$height = $imgHeight;
+	$width = $tileDataLength*2/$height;
+	if ( $width % 8 ) {
+	    $width = 8 * ( 1 + int( $width / 8 ) );
+	}
+    } else {
+	$height = 8;
+	$width = $tileDataLength*2/$height;
+    }
+
+    my $paletteCount = 1;
+    if ( $paletteMapCinepakFile ne '' ) {
+	$paletteCount = length($paletteData)/32;
+    }
+
+    my $png = '';
+    my $chunk;
+
+    # PNG file signature
+    $png .= chr(0x89).'PNG'.chr(0x0D).chr(0x0A).chr(0x1A).chr(0x0A);
+
+    # IHDR image header chunk
+    $chunk = 'IHDR';
+    # width
+    $chunk .= pack("N",$width);
+    # height
+    $chunk .= pack("N",$height);
+    # bit depth
+    if ( $paletteCount == 1 ) {
+	$chunk .= chr(4);
+    } else {
+	$chunk .= chr(8);
+    }
+    # color type (palette)
+    $chunk .= chr(3);
+    # compression method
+    $chunk .= chr(0);
+    # filter method
+    $chunk .= chr(0);
+    # interlace method
+    $chunk .= chr(0);
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    if ( $pngSRGB ) {
+	# sRGB Standard RGB color space
+	$chunk = 'sRGB';
+	# rendering intent (perceptual)
+	$chunk .= chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    # PLTE palette chunk
+    $chunk = 'PLTE';
+    for ( my $pIndex = 0; $pIndex < $paletteCount*16; $pIndex++ ) {
+	my $pValue0;
+	my $pValue1;
+	$pValue0 = ord(substr($paletteData,$pIndex*2,1));
+	$pValue1 = ord(substr($paletteData,$pIndex*2+1,1));
+	my $r = &Convert3BitColorTo8BitColor($pValue1 >> 1);
+	my $g = &Convert3BitColorTo8BitColor($pValue1 >> 5);
+	my $b = &Convert3BitColorTo8BitColor($pValue0 >> 1);
+	$chunk .= chr($r).chr($g).chr($b);
+    }
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    # tRNS Transparency
+    if ( $trans ) {
+	$chunk = 'tRNS';
+	$chunk .= chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    if ( $background ) {
+	# bKGD Background color
+	$chunk = 'bKGD';
+	$chunk .= chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    if ( $aspectX && $aspectY ) {
+	# pHYs Physical Pixel Dimenions
+	$chunk = 'pHYs';
+	$chunk .= pack("N",$aspectX*3).pack("N",$aspectY*4).chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    # IDAT Image data
+    # basically reordering the data
+    $chunk = 'IDAT';
+    my $filtered = '';
+    my $w8 = int( $width / 8 );
+    my $h8 = int( $height / 8 );
+    for ( my $y = 0; $y < $height; $y++ ) {
+	my $tileY = int( $y / 8 );
+	# filter byte (none)
+	$filtered .= chr(0x00);
+	for ( my $x = 0; $x < $width; $x += 2 ) {
+	    my $tileX = int( $x / 8 );
+	    my $value;
+	    my $tile;
+	    if ( $map ) {
+		$tile = $tileY * $w8 + $tileX;
+	    } else {
+		$tile = $tileY + $tileX * $h8;
+	    }
+	    if ( 32 * $tile >= $tileDataLength ) {
+		$value = chr(0x00);
+	    } else {
+		$value = substr($tileData,$tile*32+($x%8)/2+($y%8)*4,1);
+	    }
+	    if ( $paletteCount > 1 &&
+		 $paletteMapCinepak ne '' ) {
+		my $valueInt = ord($value);
+		my $pal = (ord(substr($paletteMapCinepak,int($tile/4),1))>>2*((3-($tile%4)))) & 0x3;
+		$value =
+		    chr((($valueInt>>4) & 0xF)|($pal<<4)).
+		    chr((($valueInt) & 0xF)|($pal<<4));
+	    }
+	    $filtered .= $value;
+	}
+    }
+    $chunk .= &zlib($filtered);
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    # IEND Image trailer
+    $chunk = 'IEND';
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    my $pngFile = $pngcrush ? 'TMP.PNG' : $imgFile;
+
+    # write the simplest PNG file
+    open( PNG, ">$pngFile" ) or die "Could not write $pngFile: $!\n";
+    binmode PNG;
+    print PNG $png;
+    close PNG;
+
+    if ( $pngcrush ) {
+	system("pngcrush $pngFile $imgFile > /dev/null");
+	system("rm $pngFile");
+    }
+}
+
+
+sub ReadPalette {
+    if ( ! -e $paletteFile ) {
+	die "Bad palette file: $paletteFile\n";
+    }
+    if ( $paletteFile =~ m/\.(asm|68k)$/i ) {
+	my $paletteAsmFile = $paletteFile;
+	$paletteFile = 'TMP.BIN';
+	system("scdasm -v=$verbosity $paletteAsmFile $paletteFile");
+	if ( ! -e $paletteFile ) {
+	    die "Bad scdasm since didn't make: $paletteFile";
+	}
+    }
+
+    my $paletteData = '';
+
+    open( PALETTE, $paletteFile ) or die "Cannot read palette file: $!\n";
+    binmode PALETTE;
+    seek(PALETTE,$paletteOffset,0);
+    for ( my $i = 0; $i < 4; $i++ ) {
+	my $paletteDataBuffer = '';
+	if ( read(PALETTE,$paletteDataBuffer,32) == 32 ) {
+	    $paletteData .= $paletteDataBuffer;
+	} else {
+	    last;
+	}
+    }
+    close PALETTE;
+
+    if ( $paletteData eq '' ) {
+	$paletteData = chr(0x00)x32;
+    }
+
+    return $paletteData;
+}
+
+sub ReadPaletteMapCinepak {
+    return '' if $paletteMapCinepakFile eq '';
+
+    if ( ! -e $paletteMapCinepakFile ) {
+	die "Bad palette file: $paletteMapCinepakFile\n";
+    }
+    # TODO asm?
+
+    my $paletteMapCinepak = '';
+
+    open( PALMAP, $paletteMapCinepakFile ) or die "Cannot read palette file: $!\n";
+    binmode PALMAP;
+    my $paletteMapCinepakFileSize = -s $paletteMapCinepakFile;
+    read(PALMAP,$paletteMapCinepak,$paletteMapCinepakFileSize);
+    close PALMAP;
+
+    return $paletteMapCinepak;
+    
+}
+
+sub ReadTile {
+    my $tileFile = shift @_;
+    if ( ! -e $tileFile ) {
+	die "Bad tile file: $tileFile";
+    }
+
+    if ( $tileFile =~ m/\.(asm|68k)$/i ) {
+	my $tileAsmFile = $tileFile;
+	$tileFile = 'TMP.BIN';
+	system("scdasm -v=$verbosity $tileAsmFile $tileFile");
+	if ( ! -e $tileFile ) {
+	    die "Bad scdasm since didn't make: $tileFile";
+	}
+    }
+
+    my $tileFileCount = $tileCount ? $tileCount : int((-s $tileFile)/32);
+
+    my $tileData = chr(0x00)x(32*$tileFileCount);
+
+    open( TILE, $tileFile ) or die "Cannot read tile file: $!\n";
+    binmode TILE;
+    seek(TILE,$tileOffset,0);
+    my $tileDataBuffer;
+    if ( read(TILE,$tileDataBuffer,(32*$tileFileCount)) == (32*$tileFileCount) ) {
+	$tileData = $tileDataBuffer;
+    }
+    close TILE;
+
+    return $tileData;
+}
+
+sub Convert3BitColorTo251ValueColor {
+    my ($bit3) = @_;
+    return int( ( $bit3 & 0x07 ) * 251 / 0x07 + 0.5 );
+}
+
+sub Convert3BitColorTo8BitColor {
+    my ($bit3) = @_;
+    return int( ( $bit3 & 0x07 ) * 0xF0 / 0x07 + 0.5 );
+}
+
+sub Convert8BitColorTo3BitColor {
+    my ($bit8) = @_;
+    return int( ( $bit8 & 0xFF ) * 0x07 / 0xFF + 0.5 );
+}
+
+
+
+###############################################################################
+
+
+
+# adapted from http://www.libpng.org/pub/png/spec/1.2/PNG-CRCAppendix.html
+# which contains example C source code of how to get the crc
+
+# Table of CRCs of all 8-bit messages.
+my @crc_table;
+   
+# Flag: has the table been computed? Initially false.
+my $crc_table_computed = 0;
+   
+# Make the table for a fast CRC.
+sub make_crc_table() {
+    my $c;
+    my $n;
+    my $k;
+   
+    for ($n = 0; $n < 256; $n++) {
+	$c = $n;
+	for ($k = 0; $k < 8; $k++) {
+	    if ($c & 1) {
+		$c = 0xedb88320 ^ ($c >> 1);
+	    } else {
+		$c = $c >> 1;
+	    }
+	}
+	$crc_table[$n] = $c;
+    }
+    $crc_table_computed = 1;
+}
+   
+# Update a running CRC with the bytes buf[0..len-1]--the CRC
+# should be initialized to all 1's, and the transmitted value
+# is the 1's complement of the final running CRC (see the
+# crc() routine below)).
+   
+sub update_crc($$$) {
+    my ($crc, $buf, $len) = @_;
+    my $c = $crc;
+    my $n;
+   
+    if (!$crc_table_computed) {
+	&make_crc_table();
+    }
+    for ($n = 0; $n < $len; $n++) {
+	$c = $crc_table[($c ^ ord(substr($buf,$n,1))) & 0xff] ^ ($c >> 8);
+    }
+    return $c;
+}
+   
+# Return the CRC of the bytes buf[0..len-1].
+sub crc($) {
+    my ($buf) = @_;
+    my $len = length($buf);
+    return &update_crc(0xffffffff, $buf, $len) ^ 0xffffffff;
+}
+
+
+###############################################################################
+
+
+# based on information from: http://www.zlib.net/zlib_docs.html
+
+sub zlib($) {
+    my ($buf) = @_;
+    my $len = length($buf);
+    my $result = '';
+    # deflate compressed data
+    # window size 32k
+    # compressor used fastest algorithm
+    my $cinfo = 0;
+    while ( $len > 2**($cinfo+8) && $cinfo < 7 ) {
+	$cinfo++;
+    }
+    my $value = 0x0800 | ( $cinfo << 12 );
+    # determine FCHECK
+    $value = $value + ( 31 - ( $value % 31 ) );
+    $result .= pack("n",$value);
+
+    my $index = 0;
+    my $len2 = $len;
+    while ( $len2 ) {
+	my $l = $len2 > 0xffff ? 0xffff : $len2;
+	$len2 -= $l;
+	# uncompressed
+	# set last block if no more length
+	$result .= $len2 ? chr(0x00) : chr(0x01);
+	$result .= pack("v",$l);
+	$result .= pack("v",($l ^ 0xffff));
+	$result .= substr($buf,$index,$l);
+	$index += $l;
+    }
+    
+    my $s1 = 1;
+    my $s2 = 0;
+    my $n;
+    for ($n = 0; $n < $len; $n++) {
+	$s1 = ( $s1 + ord(substr($buf,$n,1)) ) % 65521;
+	$s2 = ( $s1 + $s2 ) % 65521;
+    }
+    my $addler32 = (($s2<<16)|$s1);
+
+    $result .= pack("N",$addler32);
+
+    return $result;
+}
+
+sub addler32($) {
+    my ($buf) = @_;
+    my $len = length($buf);
+}

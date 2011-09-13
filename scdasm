@@ -1,0 +1,54 @@
+#!/usr/bin/perl
+###############################################################################
+
+use strict;
+use warnings;
+
+my $cmd = 'asmx -pu1 -pa0 -u -n -C 68000 -b 0 -e -w';
+
+my $verbosity = 2;
+
+my @args;
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } else {
+	push @args, $arg;
+    }
+}
+
+if ( $#args == 1 ) {
+    my $asm = $args[0];
+    my $bin = $args[1];
+    $cmd .= " -o $bin -- $asm";
+} elsif ( $#args == 2 ) {
+    my $asm = $args[0];
+    my $bin = $args[1];
+    my $lst = $args[2];
+    $cmd .= " -l $lst -o $bin -- $asm";
+} else {
+    die "scdasm <asm> <bin> [lst] [-v=<#>]\n";
+}
+
+# only need to filter STDERR if low verbosity
+if ( $verbosity < 2 ) {
+    # TODO not sure how portable 2>&1 is though...
+    # TODO can be avoided by not setting verbosity
+    $cmd .= ' 2>&1';
+}
+
+if ( ! open( CMD, "$cmd |" ) ) {
+    die "scdasm could not run command: $cmd\n";
+}
+
+while ( my $line = <CMD> ) {
+    # remove empty lines
+    # remove Pass 1 and Pass 2 lines
+    # remove 0 Total Error(s) lines
+    if ( $verbosity >= 2 ||
+	 $line !~ m/^(\s*|\s*Pass\s*[12]\s*|\s*0+\s*Total\s*Error\(s\)\s*)$/ ) {
+	print $line;
+    }
+}
+
+close CMD;

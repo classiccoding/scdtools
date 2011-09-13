@@ -1,0 +1,53 @@
+#!/usr/bin/perl
+###############################################################################
+
+use strict;
+use warnings;
+
+# TODO cheap and use isoinfo, make platform independent
+
+if ( $#ARGV != 1 ) {
+    &Help();
+}
+
+my $iso = $ARGV[0];
+my $isoIndex = $ARGV[1];
+
+my @found;
+
+if ( open( PIPE, "isoinfo -l -i \"$iso\" |" ) ) {
+    while ( my $line = <PIPE> ) {
+	if ( $line =~ /^\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+[^\[]+\[\s*(\d+)\s+0+\s*\]\s+(\S+)\s*$/ ) {
+	    my $fileSize = $1;
+	    my $fileStartSector = $2;
+	    my $fileName = $3;
+	    #print "$fileSize $fileStartSector $fileName\n";
+	    my $fileStart = $fileStartSector * 0x800;
+	    if ( $isoIndex >= $fileStart &&
+		 $isoIndex < $fileStart + $fileSize ) {
+		my $offset = $isoIndex - $fileStart;
+		push @found, "$fileName:$offset";
+	    }
+	}
+    }
+}
+close PIPE;
+
+if ( $#found > 0 ) {
+    print "file_found_in_multiple_files\n";
+} elsif ( $#found < 0 ) {
+    print "file_not_found\n";
+} else {
+    print $found[0]."\n";
+}
+
+sub Help {
+    die '
+scdisofilefromoffset [isofile] [isoindex]
+
+[description]
+  given an ISO and an byte index into the ISO, report the file name and file
+  offset of where the file that is located at that byte index
+
+';
+}

@@ -1,0 +1,328 @@
+#!/usr/bin/perl
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $frameIndex = 0;
+my $tileDataLast = '';
+my $tileDataLast2 = '';
+my $tileDataSize = 0;
+
+# some cinepak fill the codebooks with unused entries
+my $codebooksFill = 0;
+
+my $frameEncodedPrefix = 'cinepaktiledata';
+
+my @tileDataFiles;
+
+# parse args
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-codebooksfill$/i ) {
+	$codebooksFill = 1;
+    } elsif ( -e $arg ) {
+	push @tileDataFiles, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+foreach my $tileDataFile (@tileDataFiles) {
+    my $tileDataFileSize = -s $tileDataFile;
+
+    if ( $tileDataFileSize <= 0 || $tileDataFileSize % 32 != 0 ) {
+	die "Frame files should be non-zero and on 32 byte boundary\n";
+    }
+
+    if ( $tileDataSize > 0 && $tileDataSize != $tileDataFileSize ) {
+	die "Every frame should be the same size\n";
+    }
+
+    $tileDataSize = $tileDataFileSize;
+
+    open( FRAME, '<'.$tileDataFile ) or die "Could not open $tileDataFile\n";
+
+    my $tileData = '';
+
+    if ( read( FRAME, $tileData, $tileDataSize ) != $tileDataSize ) {
+	die "Could not read $tileDataFile contents\n";
+    }
+
+    close FRAME;
+
+    my $methodFlagsData = '';
+    my $methodFlagsCurrentLongWord = 0;
+    my $methodFlagsShift = 30;
+    my @methodFlagsCount = (0,0,0,0);
+
+    my $codebook32Data = '';
+    my $codebook32Size = 0;
+
+    my $codebook16Data = '';
+    my $codebook16Size = 0;
+
+    my $vectorData = '';
+
+    my %tiles;
+
+    {
+	my %codebook32MapAll = ();
+
+	# determine non-changing tiles and codebook 32 data
+	for ( my $tileDataIndex = 0; $tileDataIndex < $tileDataSize; $tileDataIndex += 32 ) {
+	    my $tile = substr($tileData,$tileDataIndex,32);
+	    my $methodFlag = 0;
+	    if ( $frameIndex > 1 &&
+		 $tile eq substr($tileDataLast2,$tileDataIndex,32) ) {
+		# this tile has not changed
+		$tiles{$tileDataIndex}{'data'} = '';
+		$tiles{$tileDataIndex}{'rank'} = -1;
+	    } else {
+		$tiles{$tileDataIndex}{'data'} = $tile;
+		$tiles{$tileDataIndex}{'rank'} = 32.25;
+		for ( my $i = 0; $i < 32; $i += 8 ) {
+		    for ( my $j = 0; $j < 4; $j += 2 ) {
+			my $k = substr($tile,$i+$j,2).substr($tile,$i+$j+4,2);
+			if ( ! exists $codebook32MapAll{$k} ) {
+			    $codebook32MapAll{$k} = 1;
+			} else {
+			    $codebook32MapAll{$k}++;
+			}
+		    }
+		}
+	    }
+	}
+
+	# rank each tile based on approximate bytes for codebook 32 usage
+	# tiles that use popular codebook entries get a smaller rank
+	foreach my $tileDecodedIndex (keys %tiles) {
+	    next if $tiles{$tileDecodedIndex}{'rank'} < 0;
+	    my $tile = $tiles{$tileDecodedIndex}{'data'};
+	    my $rank = 8.25;
+	    for ( my $i = 0; $i < 32; $i += 8 ) {
+		for ( my $j = 0; $j < 4; $j += 2 ) {
+		    my $k = substr($tile,$i+$j,2).substr($tile,$i+$j+4,2);
+		    $rank += 4 / $codebook32MapAll{$k};
+		}
+	    }
+	    $tiles{$tileDecodedIndex}{'rank'} = $rank;
+	}
+    }
+
+    {
+	my %codebook32Map = ();
+
+	# now add the lowest ranked tiles first
+	foreach my $tileDecodedIndex (sort { $tiles{$a}{'rank'} <=> $tiles{$b}{'rank'} } keys %tiles) {
+	    next if $tiles{$tileDecodedIndex}{'rank'} < 0;
+	    # if worst than uncompressed tile, don't do it...
+	    last if $tiles{$tileDecodedIndex}{'rank'} >= 40.25;
+	    my $tile = $tiles{$tileDecodedIndex}{'data'};
+	    # see if have enough codebook 32 entries still
+	    my $entriesToAdd = 0;
+	    if ( $codebook32Size > 256 - 8 ) {
+		my %codebook32MapAugment;
+		for ( my $i = 0; $i < 32; $i += 8 ) {
+		    for ( my $j = 0; $j < 4; $j += 2 ) {
+			my $k = substr($tile,$i+$j,2).substr($tile,$i+$j+4,2);
+			if ( ! exists $codebook32Map{$k} &&
+			     ! exists $codebook32MapAugment{$k} ) {
+			    $entriesToAdd++;
+			    $codebook32MapAugment{$k} = 1;
+			}
+		    }
+		}
+		if ( 8.25 + $entriesToAdd * 4 > 32.25 ) {
+		    next;
+		}
+	    }
+	    if ( $codebook32Size + $entriesToAdd <= 256 ) {
+		my $tileNew = '';
+		for ( my $i = 0; $i < 32; $i += 8 ) {
+		    for ( my $j = 0; $j < 4; $j += 2 ) {
+			my $k = substr($tile,$i+$j,2).substr($tile,$i+$j+4,2);
+			my $vector;
+			if ( ! exists $codebook32Map{$k} ) {
+			    $codebook32Data .= $k;
+			    $vector = chr($codebook32Size);
+			    $codebook32Map{$k} = $vector;
+			    $codebook32Size += 1;
+			} else {
+			    $vector = $codebook32Map{$k};
+			}
+			$tileNew .= $vector;
+		    }
+		}
+		$tiles{$tileDecodedIndex}{'data'} = $tileNew;
+		$tiles{$tileDecodedIndex}{'rank'} = -2;
+	    }
+	}
+    }
+
+    {
+	my %codebook16MapAll = ();
+	# get codebook 16 data for remaining tiles
+	foreach my $tileDecodedIndex (keys %tiles) {
+	    next if $tiles{$tileDecodedIndex}{'rank'} < 0;
+	    my $tile = $tiles{$tileDecodedIndex}{'data'};
+	    for ( my $i = 0; $i < 32; $i += 8 ) {
+		for ( my $j = 0; $j < 4; $j += 1 ) {
+		    my $k = substr($tile,$i+$j,1).substr($tile,$i+$j+4,1);
+		    if ( ! exists $codebook16MapAll{$k} ) {
+			$codebook16MapAll{$k} = 1;
+		    } else {
+			$codebook16MapAll{$k}++;
+		    }
+		}
+	    }
+	}
+
+	# rank each tile based on approximate bytes for codebook 32 usage
+	# tiles that use popular codebook entries get a smaller rank
+	foreach my $tileDecodedIndex (keys %tiles) {
+	    next if $tiles{$tileDecodedIndex}{'rank'} < 0;
+	    my $tile = $tiles{$tileDecodedIndex}{'data'};
+	    my $rank = 16.25;
+	    for ( my $i = 0; $i < 32; $i += 8 ) {
+		for ( my $j = 0; $j < 4; $j += 1 ) {
+		    my $k = substr($tile,$i+$j,1).substr($tile,$i+$j+4,1);
+		    $rank += 2 / $codebook16MapAll{$k};
+		}
+	    }
+	    $tiles{$tileDecodedIndex}{'rank'} = $rank;
+	}
+    }
+
+    {
+	my %codebook16Map = ();
+	# now add the lowest ranked tiles first
+	foreach my $tileDecodedIndex (sort { $tiles{$a}{'rank'} <=> $tiles{$b}{'rank'} } keys %tiles) {
+	    next if $tiles{$tileDecodedIndex}{'rank'} < 0;
+	    # if worst than uncompressed tile, don't do it...
+	    last if $tiles{$tileDecodedIndex}{'rank'} >= 48.25;
+	    my $tile = $tiles{$tileDecodedIndex}{'data'};
+	    # see if have enough codebook 16 entries still
+	    my $entriesToAdd = 0;
+	    if ( $codebook16Size > 256 - 16 ) {
+		my %codebook16MapAugment;
+		for ( my $i = 0; $i < 32; $i += 8 ) {
+		    for ( my $j = 0; $j < 4; $j += 1 ) {
+			my $k = substr($tile,$i+$j,1).substr($tile,$i+$j+4,1);
+			if ( ! exists $codebook16Map{$k} &&
+			     ! exists $codebook16MapAugment{$k} ) {
+			    $entriesToAdd++;
+			    $codebook16MapAugment{$k} = 1;
+			}
+		    }
+		}
+		if ( 16.25 + $entriesToAdd * 2 > 32.25 ) {
+		    next;
+		}
+	    }
+	    if ( $codebook16Size + $entriesToAdd <= 256 ) {
+		my $tileNew = '';
+		for ( my $i = 0; $i < 32; $i += 8 ) {
+		    for ( my $j = 0; $j < 4; $j += 1 ) {
+			my $k = substr($tile,$i+$j,1).substr($tile,$i+$j+4,1);
+			my $vector;
+			if ( ! exists $codebook16Map{$k} ) {
+			    $codebook16Data .= $k;
+			    $vector = chr($codebook16Size);
+			    $codebook16Map{$k} = $vector;
+			    $codebook16Size += 1;
+			} else {
+			    $vector = $codebook16Map{$k};
+			}
+			$tileNew .= $vector;
+		    }
+		}
+		$tiles{$tileDecodedIndex}{'data'} = $tileNew;
+		$tiles{$tileDecodedIndex}{'rank'} = -2;
+	    }
+	}
+    }
+
+    # now put the tiles back in order and make method data and vector data
+    foreach my $tileDecodedIndex (sort { $a <=> $b } keys %tiles) {
+	my $tile = $tiles{$tileDecodedIndex}{'data'};
+	my $tileLength = length($tile);
+	my $methodFlag = 0;
+	if ( $tileLength == 0 ) {
+	    $methodFlag = 0;
+	} elsif ( $tileLength == 32 ) {
+	    $methodFlag = 1;
+	} elsif ( $tileLength == 8 ) {
+	    $methodFlag = 2;
+	} elsif ( $tileLength == 16 ) {
+	    $methodFlag = 3;
+	} else {
+	    die "Error\n";
+	}
+
+	$vectorData .= $tile;
+
+    	$methodFlagsCurrentLongWord |= ( $methodFlag & 3 ) << $methodFlagsShift;
+
+    	$methodFlagsShift -= 2;
+
+    	if ( $methodFlagsShift < 0 ) {
+    	    $methodFlagsData .= pack("N",$methodFlagsCurrentLongWord);
+    	    $methodFlagsCurrentLongWord = 0;
+    	    $methodFlagsShift += 32;
+    	}
+
+    	$methodFlagsCount[$methodFlag] += 1;
+    }
+
+    print "$tileDataFile\n";
+    print "  Method flags count: ".join(' ',@methodFlagsCount)."\n";
+    print "  Codebook32 count: $codebook32Size\n";
+    print "  Codebook16 count: $codebook16Size\n";
+
+    if ( $methodFlagsShift < 30 ) {
+	$methodFlagsData .= pack("N",$methodFlagsCurrentLongWord);
+    }
+
+    if ( $codebooksFill ) {
+	$codebook32Data .= chr(0x00) x ( 4 * ( 256 - $codebook32Size ) );
+	$codebook32Size = 256;
+    }
+
+    if ( $codebooksFill ) {
+	$codebook16Data .= chr(0x00) x ( 2 * ( 256 - $codebook16Size ) );
+	$codebook16Size = 256;
+    }
+
+    my $frameEncodedFile = sprintf("%s%5.5d.bin",$frameEncodedPrefix,$frameIndex);
+    my $frameEncoded = '';
+    $frameEncoded .= pack("N",$codebook32Size*4) . $codebook32Data;
+    $frameEncoded .= pack("N",$codebook16Size*2) . $codebook16Data;
+    $frameEncoded .= $methodFlagsData;
+    $frameEncoded .= $vectorData;
+
+    open( FRAME, '>'.$frameEncodedFile ) or die "Cannot write $frameEncodedFile\n";
+    print FRAME $frameEncoded;
+    close FRAME;
+
+    $frameIndex += 1;
+    $tileDataLast2 = $tileDataLast;
+    $tileDataLast = $tileData;
+}
+
+sub Help {
+    die '
+scdcinepakencodeframe [options] <tiledatafiles...>
+
+[description]
+  takes the tiledata and encodes it using Cinepak for Sega and outputs
+  sequentially named cinepaktiledata*.bin files
+
+[options]
+  -codebooksfill  fill the codebooks so always have 256 entries
+';
+}

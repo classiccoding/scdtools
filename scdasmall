@@ -1,0 +1,106 @@
+#!/usr/bin/perl
+###############################################################################
+# assemble the assembly with each compiler and make sure it produces the
+# same binary (looking for fully optimized binaries)
+###############################################################################
+
+use strict;
+use warnings;
+
+# assembler path names
+# for those running natively can use short name if assembler is in your path
+# Which($) allows short names for wine/dosbox executables in your path
+
+my $asmx = 'asmx-2.0b5';
+
+# set any of the following to '' to disable
+my $asmxbgv = 'asmx-bgv';
+my $asm68k = &Which('asm68k.exe');
+my $snasm68k = &Which('SNASM68K.EXE');
+
+my $asm68kopts = '/o op+ /o os+ /o ow+ /o oz+ /o oaq+ /o osq+ /o omq+';
+my $snasm68kopts = '-o op+ -o os+ -o ow+ -o oz+ -o oaq+ -o osq+ -o omq+';
+
+# just the short file name
+my $snasm68kShort = $snasm68k;
+$snasm68kShort =~ s/^(.*[\\\/])//g;
+
+my @files;
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /-asm68kopts=(.*)$/ ) {
+	$asm68kopts = $1;
+    } elsif ( $arg =~ /-snasm68kopts=(.*)$/ ) {
+	$snasm68kopts = $1;
+    } elsif ( $arg eq '-unopt' ) {
+	$asm68kopts = '';
+	$snasm68kopts = '';
+    } else {
+	push @files, $arg;
+    }
+}
+
+if ( $#files != 0 ) {
+    die "\nscdasmall <src>\n\n";
+}
+
+my $asm = $files[0];
+
+# baseline sure still works with original asmx
+system("$asmx -C 68000 -b 0 -e -w -o asmx.bin -- $asm");
+
+my $rc0 = 0;
+if ( $asmxbgv ne '' ) {
+    # using bgv improvements to asmx that I typically use
+    system("$asmxbgv -pu1 -pa0 -C 68000 -b 0 -e -w -o asmxbgv.bin -- $asm");
+    $rc0 = system("diff asmxbgv.bin asmx.bin");
+}
+
+my $rc1 = 0;
+if ( $asm68k ne '' ) {
+    # wine runs fine, so don't need dosbox
+    system("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin");
+    $rc1 = system("diff asmxbgv.bin asm68k.bin");
+}
+
+my $rc2 = 0;
+if ( $snasm68k ne '' ) {
+    # wine can't run, so need to make a bat file to run command with options
+    # copy to local directory so that local directory is mounted
+    system("cp $snasm68k .");
+    system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN' > SNASM68K.BAT");
+    system("dosbox SNASM68K.BAT -exit");
+    $rc2 = system("diff asmxbgv.bin SNASM68K.BIN");
+}
+
+print "\n";
+
+# see if clean diffs, if so clean up files and report it was clean
+if ( ! $rc0 && ! $rc1 && ! $rc2 ) {
+    system("rm asmx.bin");
+    if ( $asmxbgv ne '' ) {
+	system("rm asmxbgv.bin");
+    }
+    if ( $asm68k ne '' ) {
+	system("rm asm68k.bin");
+    }
+    if ( $snasm68k ne '' ) {
+	system("rm $snasm68kShort");
+	system("rm SNASM68K.BAT");
+	system("rm SNASM68K.BIN");
+    }
+    print "All clean\n";
+}
+
+print "\n";
+
+
+###############################################################################
+
+
+sub Which($) {
+    my ($file) = @_;
+    my $value = `which $file`;
+    chomp $value;
+    return $value;
+}
