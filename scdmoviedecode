@@ -6,33 +6,6 @@
 use strict;
 use warnings;
 
-sub Help {
-    die '
-scdmovieencode [options] <moviefiles...>
-
-[description]
-  decodes Sega CD movie formats allowing information gathering, extraction of
-  tile data, palettes, palettes maps, and raw PCM, and conversion to PNGs and
-  wav files
-
-[options]
-  -seekcinepak       search ISO on every sector boundary for a FILM header
-                     and process each corresponding cinepak movie
-  -cinepak           decode as cinepak for sega format [default]
-  -stm               decode as Sonic CD\'s OPN.STM format
-  -sga               decode as SGA format
-  -extractimagedata  extract paldata*.bin, palmap*.bin, and tiledata*.bin
-  -extractpngs       convert image data into pngs using scdtile2img
-  -extractpcm        extract raw pcm data (pcm.pcm)
-  -extractwav        convert pcm to wav file (pcm.wav)
-  -pngcrush          use pngcrush to make smaller png files
-  -ffmpeg            use ffmpeg to make an avi file of the movie
-  -offset=<#>        offset into file
-
-';
-
-}
-
 if ( $#ARGV < 0 ) {
     &Help();
 }
@@ -1022,4 +995,31 @@ sub SegaCDPCMToWav {
 	print WAV $wavData;
 	close WAV;
     }
+}
+
+sub Help {
+    die '
+scdmovieencode [options] <moviefiles...>
+
+[description]
+  decodes Sega CD movie formats allowing information gathering, extraction of
+  tile data, palettes, palettes maps, and raw PCM, and conversion to PNGs and
+  wav files
+
+[options]
+  -seekcinepak       search ISO on every sector boundary for a FILM header
+                     and process each corresponding cinepak movie
+  -cinepak           decode as cinepak for sega format [default]
+  -stm               decode as Sonic CD\'s OPN.STM format
+  -sga               decode as SGA format
+  -extractimagedata  extract paldata*.bin, palmap*.bin, and tiledata*.bin
+  -extractpngs       convert image data into pngs using scdtile2img
+  -extractpcm        extract raw pcm data (pcm.pcm)
+  -extractwav        convert pcm to wav file (pcm.wav)
+  -pngcrush          use pngcrush to make smaller png files
+  -ffmpeg            use ffmpeg to make an avi file of the movie
+  -offset=<#>        offset into file
+
+';
+
 }

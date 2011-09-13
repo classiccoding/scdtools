@@ -3,17 +3,6 @@
 use strict;
 use warnings;
 
-sub Help {
-    die '
-scdwav2pcm <wavFile> <pcmFile>
-
-[description]
-  converts an unsigned 8 bit unsigned wav file to an 8 bit signed magnitude
-  pcm file (does not test if wav file is in unexpected format)
-
-';
-}
-
 if ( $#ARGV != 1 ) {
     &Help();
 }
@@ -73,3 +62,13 @@ $pcmData .= chr(0xFF)x2;
 print PCM $pcmData;
 close PCM;
 
+sub Help {
+    die '
+scdwav2pcm <wavFile> <pcmFile>
+
+[description]
+  converts an unsigned 8 bit unsigned wav file to an 8 bit signed magnitude
+  pcm file (does not test if wav file is in unexpected format)
+
+';
+}

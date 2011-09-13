@@ -8,10 +8,6 @@
 use strict;
 use warnings;
 
-sub Help {
-    die "\nscdtile2img [-palfile=<file>] [-paloffset=<#>] [-palbyteoffset=<#>] [-map] [-palmapcinepak=<file>] [-width=<#>] [-height=<#>] [-aspect320x240] [-aspect256x240] [-aspect320x224] [-aspect256x224] [-pngcrush] [-notransparency] [-background] [-imgfile=<file>] [-tileoffset=<#>] [-tilebyteoffset=<#>] [-tilecount=<#>] [-v=<#>] <tilefiles...>\n\n";
-}
-
 if ( $#ARGV < 0 ) {
     &Help();
 }
@@ -495,4 +491,34 @@ sub zlib($) {
 sub addler32($) {
     my ($buf) = @_;
     my $len = length($buf);
+}
+
+sub Help {
+    die '
+scdtile2img [options] <tilefiles...>
+
+[description]
+  converts Sega VDP format files to a PNG image
+
+[options]
+  -palfile=<file>        specifies the palette data
+  -paloffset=<#>         palette offset of the first palette in the palette file
+  -palbyteoffset=<#>     byte offset of the first palette in the palette file
+  -palmapcinepak=<file>  specifies the palette map file (cinepak format)
+  -width=<#>             specifies the width of the image
+  -height=<#>            specifies the height of the image
+  -aspect320x240         sets PNG aspect accordingly
+  -aspect256x240         sets PNG aspect accordingly
+  -aspect320x224         sets PNG aspect accordingly
+  -aspect256x224         sets PNG aspect accordingly
+  -pngcrush              call pngcrush to make smaller PNG files
+  -notransparency        do not use transparency for color 0
+  -background            set background color in PNG to black
+  -imgfile=<file>        the name of the output image file
+  -tileoffset=<#>        the tile offset (32 byte) into the tile data
+  -tilebyteoffset=<#>    the byte offset into the tile data
+  -tilecount=<#>         the number of tiles to use (default use all)
+  -v=<#>              specify verbosity
+
+';
 }

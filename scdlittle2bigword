@@ -6,6 +6,10 @@
 use strict;
 use warnings;
 
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
 foreach my $file (@ARGV) {
     if ( open( FILE, $file ) ) {
 	binmode FILE;
@@ -29,4 +33,15 @@ foreach my $file (@ARGV) {
     }
 
     close FILE;
+}
+
+sub Help {
+    die '
+scdlittle2bigword <files>
+
+[description]
+  Convert from little endian words to big endian words.  Used to covert CRAM
+  part of a savestate to a more convient endian.
+
+';
 }

@@ -4,10 +4,6 @@
 use strict;
 use warnings;
 
-sub Help {
-    die "\nscdhex <cmd> [cmdoptions] <files>\n\n<cmd>:\n\tsearch <search>\n\treplace <search> <replace>\n\nexamples:\n\tscdhex search 0000000008220A440C660E880EEE0AAA0888044408AE046A000E0008000400EE R*__.MMD\n\tscdhex replace 427900FF1512 4E714E714E71 R*__.MMD\n\n";
-}
-
 if ( $#ARGV < 1 ) {
     &Help();
 }
@@ -84,4 +80,24 @@ foreach my $binFile (@ARGV) {
 
 if ( $cmd eq 'replace' ) {
     print "$tokenSearchString -> $tokenReplaceString: $updates\n";
+}
+
+sub Help {
+    die '
+scdhex <cmd> [cmdoptions] <files>
+
+[description]
+  Performs search/replace type operations using hexadecimal strings on a binary
+  file.  Was originally developed for simple ISO hacking of Sonic CD.
+
+[cmd]
+  search <search>
+  replace <search> <replace>
+
+[examples]
+  scdhex search \
+    0000000008220A440C660E880EEE0AAA0888044408AE046A000E0008000400EE R*__.MMD
+  scdhex replace 427900FF1512 4E714E714E71 R*__.MMD
+
+';
 }

@@ -27,7 +27,7 @@ if ( $#args == 1 ) {
     my $lst = $args[2];
     $cmd .= " -l $lst -o $bin -- $asm";
 } else {
-    die "scdasm <asm> <bin> [lst] [-v=<#>]\n";
+    &Help();
 }
 
 # only need to filter STDERR if low verbosity
@@ -52,3 +52,16 @@ while ( my $line = <CMD> ) {
 }
 
 close CMD;
+
+sub Help {
+    die '
+scdasm [options] <asmfile> <binfile> [lstfile]
+
+[description]
+  wrapper script for assembling 68k code
+
+[options]
+  -v=<#>              specify verbosity
+
+';
+}

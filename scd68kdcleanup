@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 if ( $#ARGV != 0 ) {
-    die "scd68kdcleanup <file>\n";
+    &Help();
 }
 
 open( DIS, '<'.$ARGV[0] );
@@ -26,3 +26,14 @@ while ( my $line = <DIS> ) {
     print $line;
 }
 close DIS;
+
+sub Help {
+    die '
+scd68kdcleanup <file>
+
+[description]
+  cleans up the output from 68kd (a 68000 disassembler) to make it quicker
+  to work on the disassmbly
+
+';
+}

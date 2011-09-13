@@ -1,7 +1,5 @@
 #!/usr/bin/perl
 ###############################################################################
-# bgvanbur's scdmake script
-###############################################################################
 # TODO would be cool to be able to make a ROM using scdmake
 #   right now can do it in a hacky sort of fashion
 #   and for more complex ISOs this would be tricky automatically
@@ -208,7 +206,8 @@ if ( -e $cfg ) {
     }
     close CFG;
 } else {
-    die "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
+    print "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
+    &Help();
 }
 
 my $loop;
@@ -218,7 +217,8 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
 	$verbosity = $1;
     } else {
-	die "Bad argument: $arg\n";
+	print "Bad argument: $arg\n";
+	&Help();
     }
 }
 
@@ -2003,3 +2003,17 @@ sub EnsureFileSizeIsWithinBounds {
     }
 }
 
+sub Help {
+    die '
+scdmake [options]
+
+[description]
+  Generate a Sega CD ISO.  
+
+[options]
+  -make               generate a default SCDMAKE.CFG file
+  -country=<country>  specify U, J, E, or all
+  -v=<#>              specify verbosity level
+
+';
+}

@@ -41,7 +41,7 @@ foreach my $arg (@ARGV) {
 }
 
 if ( $#files != 0 ) {
-    die "\nscdasmall <src>\n\n";
+    &Help();
 }
 
 my $asm = $files[0];
@@ -103,4 +103,19 @@ sub Which($) {
     my $value = `which $file`;
     chomp $value;
     return $value;
+}
+
+sub Help {
+    die '
+scdasmall [options] <asmfile>
+
+[description]
+  ensure several assemblers all have the same binary output for an asmfile
+
+[options]
+  -asm68kopts=<opts>    opts to pass to asm68k
+  -snasm68kopts=<opts>  opts to pass to snasm68k
+  -unopt                do not send optimization opts to assemblers
+
+';
 }

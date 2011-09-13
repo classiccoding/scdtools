@@ -155,6 +155,16 @@ sub GetSegaColors {
 }
 
 sub Help {
-    die "\nscdimg2tile [-palget] [-palcount=<#>] [-palfile=<file>] [-paloffset=<#>] [-palbyteoffset=<#>] [-map] [-mapoffset=<#>] [-showmap] [-sequentialmap] [-compress=<#>] [-magicpink] [-magicblack] [-nolabels] [-v=<#>] <imgfiles...>\n\n";
-}
+    die '
+scdimgvdppalette [options] <imgfiles>
 
+[description]
+  TODO.  Work in progress to convert image to Sega VDP with dithering and
+  palette reduction.  Still not general purpose yet.
+
+[options]
+  -magicpink          treat #FF00FF as transparent
+  -magicblack         treat #000000 as transparent
+
+';
+}

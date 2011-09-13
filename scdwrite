@@ -10,6 +10,10 @@
 use strict;
 use warnings;
 
+if ( $#ARGV >= 0 ) {
+    &Help();
+}
+
 ###############################################################################
 # configuration variables
 ###############################################################################
@@ -179,4 +183,14 @@ if ( $deleteCreatedFiles ) {
     foreach my $file (@filesToDelete) {
 	system("rm \"$file\"");
     }
+}
+
+sub Help {
+    die '
+scdwrite
+
+[description]
+  Write a CD-R with the data for Sega CD.
+
+';
 }

@@ -7,7 +7,7 @@ use strict;
 use warnings;
 
 if ( $#ARGV != 2 ) {
-    die "\nscdupdateinfile <updatefile> <updateoffset> <replacefile>\n\n";
+    &Help();
 }
 
 my $updateFileName = $ARGV[0];
@@ -35,3 +35,14 @@ seek( UPDATE, $updateOffset, 0 );
 print UPDATE $replaceFileData;
 
 close UPDATE;
+
+sub Help {
+    die '
+scdupdatebinfile <updatefile> <updateoffset> <replacefile>
+
+[description]
+  Replace part of a <updatefile> with the contents from <replacefile> at byte
+  position <updateoffset>.  Useful for overriding files in an ISO.
+
+';
+}

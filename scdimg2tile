@@ -10,10 +10,6 @@ use strict;
 use warnings;
 use Image::Magick;
 
-sub Help {
-    die "\nscdimg2tile [-palget] [-palcount=<#>] [-palfile=<file>] [-paloffset=<#>] [-palbyteoffset=<#>] [-map] [-mapoffset=<#>] [-showmap] [-sequentialmap] [-compress=<#>] [-magicpink] [-magicblack] [-nolabels] [-v=<#>] <imgfiles...>\n\n";
-}
-
 if ( $#ARGV < 0 ) {
     &Help();
 }
@@ -321,4 +317,31 @@ sub GetPaletteIndex {
     my $c = sprintf("0x%4.4X",unpack("n",$color));
     $missingColors{$c}++;
     return 0;
+}
+
+sub Help {
+    die '
+scdimg2tile [options] <imgfiles...>
+
+[description]
+  converts images to the Sega VDP format (assembly files with optional labels)
+
+[options]
+  -palget             get the Sega VDP palette(s) from the images
+  -palcount=<#>       specifies the number of palettes in use
+  -palfile=<file>     specifies the palette data
+  -paloffset=<#>      palette offset of the first palette in the palette file
+  -palbyteoffset=<#>  byte offset of the first palette in the palette file
+  -map                Sega VDP data should be in map order (default is sprite)
+  -showmap            produces a map that has tile reuse
+  -sequentialmap      do not reuse tiles
+  -compress=<#>       compresses the tile data for reduced colors
+                      1: compress to 2 bit color map (4 colors)
+                      2: compress to 1 bit color map (2 colors)
+  -magicpink          treat #FF00FF as transparent
+  -magicblack         treat #000000 as transparent
+  -nolabels           do not print any labels in out
+  -v=<#>              specify verbosity
+
+';
 }
