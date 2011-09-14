@@ -1,5 +1,21 @@
 #!/usr/bin/perl
 ###############################################################################
+# Copyright (c) 2011 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
 # TODO report wasted STAB space
 ###############################################################################
 
@@ -20,7 +36,10 @@ my $optimizePalettes = 0;
 my $optimizePalettesAllowSinglePalette = 0;
 
 my $pngcrush = 0;
+# TODO only applies to cinepak
 my $ffmpeg = 0;
+# TODO only applies to cinepak
+my $reencode = 0;
 
 # TODO make option
 my $scdcinepakencodeframeCompare = 0;
@@ -63,6 +82,13 @@ foreach my $arg (@ARGV) {
 	$extractImageData = 1;
 	$extractImagePNGs = 1;
 	$extractWav = 1;
+    } elsif ( $arg =~ /^-reencode$/i ) {
+	$reencode = 1;
+	$extractImageData = 1;
+	$extractPCM = 1;
+    } elsif ( $arg =~ /^-scdcinepakencodeframecompare$/i ) {
+	$scdcinepakencodeframeCompare = 1;
+	$extractImageData = 1;
     } elsif ( $arg =~ /^-extractimagedata$/i ) {
 	$extractImageData = 1;
     } elsif ( $arg =~ /^-extractpngs$/i ) {
@@ -878,6 +904,9 @@ sub ReadCinepakForSega {
 	}
     }
 
+    my $hasAudio = ( $infoAudioFrames > 0 ? 1 : 0 );
+    my $hasImages = ( $infoImageFrames > 0 ? 1 : 0 );
+
     if ( $frameRate < 0 ) {
 	$frameRate = 0;
     }
@@ -895,8 +924,17 @@ sub ReadCinepakForSega {
 	}
     }
 
-    my $hasAudio = ( $infoAudioFrames > 0 ? 1 : 0 );
-    my $hasImages = ( $infoImageFrames > 0 ? 1 : 0 );
+    if ( $reencode ) {
+	my $reencodePCM = '';
+	if ( $hasAudio ) {
+	    $reencodePCM = "-pcmfile=$pcmFile";
+	}
+	if ( $frameRate > 0 ) {
+	    system("scdcinepakencodeframe ${tileDataPrefix}*.bin ; scdcinepakencode -width=$filmVideoWidth -height=$filmVideoHeight -id=$filmVideoCodec -baserate=$filmFrameRateBase -frameduration=$frameRate $reencodePCM > NEW.ASM ; scdasm NEW.ASM NEW.CIN");
+	} else {
+	    print STDERR "Currently cannot handle reencoding movie files without constant frame rate, still possible though\n";
+	}
+    }
 
     if ( $csv ) {
 	my $fileName = $movieFile;
@@ -1017,7 +1055,10 @@ scdmovieencode [options] <moviefiles...>
   -extractpcm        extract raw pcm data (pcm.pcm)
   -extractwav        convert pcm to wav file (pcm.wav)
   -pngcrush          use pngcrush to make smaller png files
-  -ffmpeg            use ffmpeg to make an avi file of the movie
+  -ffmpeg            use ffmpeg to make an avi file of the cinepak movie
+  -reencode          use various scdtools to reencode a cinepak movie
+  -scdcinepakencodeframecompare
+                     compare file compression with scdcinepakencodeframe
   -offset=<#>        offset into file
 
 ';

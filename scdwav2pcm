@@ -1,9 +1,48 @@
 #!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2011 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
 
 use strict;
 use warnings;
 
-if ( $#ARGV != 1 ) {
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $channel = 0;
+my $endPCMChars = 2;
+my $midpointIsPositive = 0;
+my @files;
+
+# parse args
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-channel=(\d+)$/i ) {
+	$channel = $1;
+    } elsif ( $arg =~ /^-endpcmchars=(\d+)$/i ) {
+	$endPCMChars = $1;
+    } elsif ( $arg =~ /^-midpointispositive$/i ) {
+	$midpointIsPositive = 1;
+    } else {
+	push @files, $arg;
+    }
+}
+
+if ( $#files != 1 ) {
     &Help();
 }
 
@@ -12,40 +51,156 @@ my $pcmFile = $ARGV[1];
 
 if ( ! open( WAVE, '<'.$waveFile ) ) {
     print STDERR "Could not open $waveFile\n";
-    return 0;
+    exit 1;
 }
 binmode WAVE;
 
 if ( ! open( PCM, '>'.$pcmFile ) ) {
     print STDERR "Could not open $pcmFile\n";
-    return 0;
+    exit 1;
 }
 binmode PCM;
 
-my $ignore = '';
-if ( read(WAVE,$ignore,0x28) != 0x28 ) {
-    return 0;
+my $riffID = '';
+if ( read(WAVE,$riffID,4) != 4 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+if ( $riffID ne 'RIFF' ) {
+    print STDERR "WAVE missing RIFF header\n";
+    exit 1;
 }
 
-my $dataSize = '';
-if ( read(WAVE,$dataSize,4) != 4 ) {
-    return 0;
+my $riffLength = '';
+if ( read(WAVE,$riffLength,4) != 4 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$riffLength = unpack("V",$riffLength);
+
+my $riffType = '';
+if ( read(WAVE,$riffType,4) != 4 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+if ( $riffType ne 'WAVE' ) {
+    print STDERR "WAVE missing WAVE RIFF type\n";
+    exit 1;
 }
 
-$dataSize = unpack("V",$dataSize);
+my $chunkType = '';
+my $chunkLength = 0;
+while (1) {
+    my $chunkType = '';
+    if ( read(WAVE,$chunkType,4) != 4 ) {
+	print STDERR "Could not read WAVE\n";
+	exit 1;
+    }
+    if ( read(WAVE,$chunkLength,4) != 4 ) {
+	print STDERR "Could not read WAVE\n";
+	exit 1;
+    }
+    $chunkLength = unpack("V",$chunkLength);
+    if ( $chunkType eq 'fmt ') {
+	last;
+    }
+    seek(WAVE,$chunkLength,1);
+}
+
+my $fmtCompressionCode = '';
+if ( read(WAVE,$fmtCompressionCode,2) != 2 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$fmtCompressionCode = unpack("v",$fmtCompressionCode);
+if ( $fmtCompressionCode != 1 ) {
+    print STDERR "Only support PCM data in WAVE files\n";
+    exit 1;
+}
+
+my $fmtNumberOfChannels = '';
+if ( read(WAVE,$fmtNumberOfChannels,2) != 2 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$fmtNumberOfChannels = unpack("v",$fmtNumberOfChannels);
+if ( $channel >= $fmtNumberOfChannels ) {
+    print STDERR "Cannot request channel $channel when wave only has $fmtNumberOfChannels channels\n";
+    exit 1;
+}
+
+my $fmtSampleRate = '';
+if ( read(WAVE,$fmtSampleRate,4) != 4 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$fmtSampleRate = unpack("V",$fmtSampleRate);
+
+my $fmtAverageBytesPerSecond = '';
+if ( read(WAVE,$fmtAverageBytesPerSecond,4) != 4 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$fmtAverageBytesPerSecond = unpack("V",$fmtAverageBytesPerSecond);
+
+my $fmtBlockAlign = '';
+if ( read(WAVE,$fmtBlockAlign,2) != 2 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$fmtBlockAlign = unpack("v",$fmtBlockAlign);
+
+my $fmtBitsPerSample = '';
+if ( read(WAVE,$fmtBitsPerSample,2) != 2 ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
+}
+$fmtBitsPerSample = unpack("v",$fmtBitsPerSample);
+if ( $fmtBitsPerSample != 8 ) {
+    print STDERR "Only support 8-bit PCM sample data\n";
+    exit 1;
+}
+
+seek(WAVE,$chunkLength-16,1);
+
+#print "$fmtCompressionCode $fmtNumberOfChannels $fmtSampleRate $fmtAverageBytesPerSecond $fmtBlockAlign $fmtBitsPerSample\n";
+
+while (1) {
+    my $chunkType = '';
+    if ( read(WAVE,$chunkType,4) != 4 ) {
+	print STDERR "Could not read WAVE\n";
+	exit 1;
+    }
+    if ( read(WAVE,$chunkLength,4) != 4 ) {
+	print STDERR "Could not read WAVE\n";
+	exit 1;
+    }
+    $chunkLength = unpack("V",$chunkLength);
+    if ( $chunkType eq 'data') {
+	last;
+    }
+    seek(WAVE,$chunkLength,1);
+}
 
 my $data = '';
-if ( read(WAVE,$data,$dataSize) != $dataSize ) {
-    return 0;
+if ( read(WAVE,$data,$chunkLength) != $chunkLength ) {
+    print STDERR "Could not read WAVE\n";
+    exit 1;
 }
 
 close WAVE;
 
 my $pcmData = '';
-for ( my $i = 0; $i < $dataSize; $i++ ) {
+for ( my $i = $channel; $i < $chunkLength; $i += $fmtNumberOfChannels ) {
     my $valueWave = ord(substr($data,$i,1));
     my $value;
-    if ( $valueWave >= 0x80 ) {
+    if ( $valueWave == 0x80 ) {
+	if ( $midpointIsPositive ) {
+	    $value = 0x00;
+	} else {
+	    $value = 0x80;
+	}
+    } elsif ( $valueWave >= 0x80 ) {
 	$value = $valueWave - 0x80;
     } else {
 	$value = 0x80 | ( 0x80 - $valueWave );
@@ -57,18 +212,31 @@ for ( my $i = 0; $i < $dataSize; $i++ ) {
     $pcmData .= chr($value);
 }
 
-$pcmData .= chr(0xFF)x2;
+$pcmData .= ( chr(0xFF) x $endPCMChars );
 
 print PCM $pcmData;
 close PCM;
 
+my $pcmFD = int(0.5+$fmtSampleRate/(12500000/384)*0x800);
+print "Wave sample rate corresponds to a Sega CD PCM FD register value of ".sprintf("0x%4.4X",$pcmFD)."\n";
+
+
+
 sub Help {
     die '
-scdwav2pcm <wavFile> <pcmFile>
+scdwav2pcm [options] <wavFile> <pcmFile>
 
 [description]
-  converts an unsigned 8 bit unsigned wav file to an 8 bit signed magnitude
-  pcm file (does not test if wav file is in unexpected format)
+  Converts a wav file to an 8 bit signed magnitude mono Sega CD PCM data file.
+
+[options]
+  -channel=<#>         the channel index to extract (defaults to 0)
+  -endpcmchars=<#>     the number of 0xFF character to append to PCM data
+                       (defaults to 2)
+  -midpointispositive  use the PCM midpoint as 0x00 (defaults to 0x80)
+
+[limitations]
+  Currently only handles 8-bit PCM wav files.
 
 ';
 }

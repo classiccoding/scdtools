@@ -1,6 +1,24 @@
 #!/usr/bin/perl
 ###############################################################################
-# makes Ecco 2's MV001.CIN 3% smaller
+# Copyright (c) 2011 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# makes Ecco 2's MV001.CIN 97% of the original size
+# makes Star Wars Chess's X6YO_ST.SEG 45% of the original size
+#   TODO (44% once frame skip works)
 ###############################################################################
 
 use strict;
@@ -15,13 +33,18 @@ my $cinepakHeight = 14*8;
 my $cinepakIdentifier = 'SEGA';
 my $cinepakBaseRate = 600;
 
-my $cinepakFrameDuration = 75.5;
+my $cinepakFrameDuration = 75;
 
 my $cinepakForceAtLeastTwoPalettes = 1;
+# TODO still need calculate frame time before skipped frame before should be enabled
+my $optimizeSkipUnchangedFramesIfPossible = 0;
 
-my $fd = 0x0400;
+# the PCM FD value set in the SUBPLAY.BIN (default is 0x0400)
+my $pcmFD = 0x0400;
 
 my $pcmFile = '';
+# not the actual play rate,
+# but the rate the SUBPLAY.BIN code thinks it is playing at (V1.2 thinks 16000)
 my $pcmDataRate = 16000;
 
 my $pcmFramePrefix = 'pcmchunk';
@@ -34,7 +57,10 @@ foreach my $arg (@ARGV) {
 	$cinepakWidth = $1;
     } elsif ( $arg =~ /^-height=(\d+)$/i ) {
 	$cinepakHeight = $1;
-    } elsif ( $arg =~ /^-id=(.[4])$/i ) {
+    } elsif ( $arg =~ /^-size=(\d+)x(\d+)$/i ) {
+	$cinepakWidth = $1;
+	$cinepakHeight = $2;
+    } elsif ( $arg =~ /^-id=(.{4})$/i ) {
 	$cinepakIdentifier = $1;
     } elsif ( $arg =~ /^-baserate=(\d+)$/i ) {
 	$cinepakBaseRate = $1;
@@ -45,7 +71,7 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-pcmfile=(.+)$/i ) {
         $pcmFile = $1;
     } elsif ( $arg =~ /^-pcmfd=(\d+)$/i ) {
-        $fd = $1;
+        $pcmFD = $1;
     } elsif ( $arg =~ /^-pcmrate=(.+)$/i ) {
 	$pcmDataRate = $1;
     } else {
@@ -65,6 +91,11 @@ my $pcmFileSize = 0;
 
 my $pcmFrameIndex = 0;
 my @pcmFrameFiles;
+
+# used to potentially skip frames, need to make sure palettes don't change
+# if we want to skip a frame
+my $imgPaletteLast = '';
+my $imgPaletteMapLast = '';
 
 if ( $pcmFile ne '' ) {
     $pcmFileSize = -s $pcmFile;
@@ -100,8 +131,8 @@ $pcmFrameIndex = 0;
 
 my $imgFrameIndex = 0;
 
-my $pcmTimeFinal = $cinepakBaseRate * $pcmFileSize / $pcmDataRate * $fd / 0x0400;
-my $pcmTimeFrame = $cinepakBaseRate * $pcmFrameSize / $pcmDataRate * $fd / 0x0400;
+my $pcmTimeFinal = $cinepakBaseRate * $pcmFileSize / $pcmDataRate * $pcmFD / 0x0400;
+my $pcmTimeFrame = $cinepakBaseRate * $pcmFrameSize / $pcmDataRate * $pcmFD / 0x0400;
 
 my $pcmTimeCurrent = -0.4 * $pcmTimeFrame;
 
@@ -166,11 +197,9 @@ print
 
 ###############################################################################
 
-
-
 sub AddImgFrame {
     my ($imgDuration,$imgPalette,$imgPaletteMap,$imgMap) = @_;
-    $imgDuration *= $fd / 0x0400;
+    $imgDuration *= $pcmFD / 0x0400;
     while ( $pcmFrameIndex < $pcmFrameCount &&
 	    $imgTimeCurrent > $pcmTimeCurrent ) {
 	# add pcm frame
@@ -191,52 +220,117 @@ sub AddImgFrame {
 	$pcmFrameIndex += 1;
 	$pcmTimeCurrent += $pcmTimeFrame;
     }
-    my $imgDataStart = "ImgData${imgFrameIndex}Start";
-    my $imgDataEnd = "ImgData${imgFrameIndex}End";
-    my $imgPaletteSize = -s $imgPalette;
-    my $imgPaletteCount = $imgPaletteSize >> 5;
-    my $imgPaletteMapSize = $imgPaletteCount > 1 ? -s $imgPaletteMap : 0;
-    my $imgMapSize = 32 * $cinepakWidth/8 * $cinepakHeight/8;
-    my $imgTimeCurrentInt = int($imgTimeCurrent);
-    my $imgDurationInt = int($imgTimeCurrent + $imgDuration) - $imgTimeCurrentInt;
-    my $cinepakForceAtLeastTwoPalettesThisImage = 0;
-    if ( $cinepakForceAtLeastTwoPalettes &&
-	 $imgPaletteCount == 1 ) {
-	$cinepakForceAtLeastTwoPalettesThisImage = 1;
-	$imgPaletteCount = 2;
-	$imgPaletteSize = 2*32;
-	$imgPaletteMapSize = 4 * int( ( $cinepakWidth/8 * $cinepakHeight/8 + 15 ) / 16 );
+    # only skip frame if not custom and done with audio frames or don't need
+    # image frame right before next audio frame
+    my $addFrame = 1;
+    if ( $optimizeSkipUnchangedFramesIfPossible &&
+	 $customEncodingFile eq '' &&
+	 $imgPaletteLast ne '' &&
+	 ( $pcmFrameIndex >= $pcmFrameCount ||
+	   $imgTimeCurrent + $imgDuration + 1 < $pcmTimeCurrent ) ) {
+	# ensure palettes are the same
+	if ( &CompareFiles($imgPalette,$imgPaletteLast) ) {
+	    # ensure palette maps are the same
+	    if ( ( $imgPaletteMap eq '' &&
+		   $imgPaletteMapLast eq '' ) ||
+		 ( $imgPaletteMap ne '' &&
+		   $imgPaletteMapLast ne '' &&
+		   &CompareFiles($imgPaletteMap,$imgPaletteMapLast) ) ) {
+		# ensure image map is all zeros
+		# (zero codebook sizes, method map all zeros)
+		if ( open( MAP, $imgMap ) ) {
+		    my $imgMapSize = -s $imgMap;
+		    my $imgMapData = '';
+		    if ( read(MAP,$imgMapData,$imgMapSize) == $imgMapSize ) {
+			if ( $imgMapData !~ /[\x01-\xFF]/ ) {
+			    $addFrame = 0;
+			}
+		    }
+		}
+		close MAP;
+	    }
+	}
     }
-    $cinepakSampleTable .= 
-	"ImgEntry${imgFrameIndex}:\n".
-	"\tdc.l\t($imgDataStart-SampleDataStart)\n".
-	"\tdc.l\t($imgDataEnd-$imgDataStart)\n".
-	"\tdc.l\t$imgTimeCurrentInt\n".
-	"\tdc.l\t$imgDurationInt\n";
-    $cinepakSampleData .=
-	"$imgDataStart:\n".
-	"\tdc.b\t'SM',0x00,0x2".($imgPaletteCount-1)."\n".
-	"\tdc.l\t".(12+$imgPaletteSize+$imgPaletteMapSize+$imgMapSize)."\n".
-	"\tdc.w\t".($cinepakWidth/8)."\n".
-	"\tdc.w\t".($cinepakHeight/8)."\n".
-	"\tincbin\t$imgPalette\n";
+    if ( $addFrame ) {
+	my $imgDataStart = "ImgData${imgFrameIndex}Start";
+	my $imgDataEnd = "ImgData${imgFrameIndex}End";
+	my $imgPaletteSize = -s $imgPalette;
+	my $imgPaletteCount = $imgPaletteSize >> 5;
+	my $imgPaletteMapSize = $imgPaletteCount > 1 ? -s $imgPaletteMap : 0;
+	my $imgMapSize = 32 * $cinepakWidth/8 * $cinepakHeight/8;
+	my $imgTimeCurrentInt = int($imgTimeCurrent);
+	my $imgDurationInt = int($imgTimeCurrent + $imgDuration) - $imgTimeCurrentInt;
+	my $cinepakForceAtLeastTwoPalettesThisImage = 0;
+	if ( $cinepakForceAtLeastTwoPalettes &&
+	     $imgPaletteCount == 1 ) {
+	    $cinepakForceAtLeastTwoPalettesThisImage = 1;
+	    $imgPaletteCount = 2;
+	    $imgPaletteSize = 2*32;
+	    $imgPaletteMapSize = 4 * int( ( $cinepakWidth/8 * $cinepakHeight/8 + 15 ) / 16 );
+	}
+	$cinepakSampleTable .= 
+	    "ImgEntry${imgFrameIndex}:\n".
+	    "\tdc.l\t($imgDataStart-SampleDataStart)\n".
+	    "\tdc.l\t($imgDataEnd-$imgDataStart)\n".
+	    "\tdc.l\t$imgTimeCurrentInt\n".
+	    # TODO does not correctly indicate value for skipped frames
+	    "\tdc.l\t$imgDurationInt\n";
+	$cinepakSampleData .=
+	    "$imgDataStart:\n".
+	    "\tdc.b\t'SM',0x00,0x2".($imgPaletteCount-1)."\n".
+	    "\tdc.l\t".(12+$imgPaletteSize+$imgPaletteMapSize+$imgMapSize)."\n".
+	    "\tdc.w\t".($cinepakWidth/8)."\n".
+	    "\tdc.w\t".($cinepakHeight/8)."\n".
+	    "\tincbin\t$imgPalette\n";
 
-    if ( $cinepakForceAtLeastTwoPalettesThisImage ) {
-	# zeroed extra palette
+	if ( $cinepakForceAtLeastTwoPalettesThisImage ) {
+	    # zeroed extra palette
+	    $cinepakSampleData .=
+		"\tdc.w\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+	    # zeroed palette map
+	    $cinepakSampleData .=
+		"\tdc.l\t0".(",0"x($imgPaletteMapSize/4-1))."\n";
+	} elsif ( $imgPaletteCount > 1 ) {
+	    $cinepakSampleData .=
+		"\tincbin\t$imgPaletteMap\n";
+	}
 	$cinepakSampleData .=
-	    "\tdc.w\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
-	# zeroed palette map
+	    "\tincbin\t$imgMap\n".
+	    "$imgDataEnd:\n";
+    } else {
+	$cinepakSampleTable .= 
+	    "\t;; image frame skipped\n";
 	$cinepakSampleData .=
-	    "\tdc.l\t0".(",0"x($imgPaletteMapSize/4-1))."\n";
-    } elsif ( $imgPaletteCount > 1 ) {
-	$cinepakSampleData .=
-	    "\tincbin\t$imgPaletteMap\n";
+	    "\t;; image frame skipped\n";
     }
-    $cinepakSampleData .=
-	"\tincbin\t$imgMap\n".
-	"$imgDataEnd:\n";
+    $imgPaletteLast = $imgPalette;
+    $imgPaletteMapLast = $imgPaletteMap;
     $imgFrameIndex += 1;
     $imgTimeCurrent += $imgDuration;
+}
+
+sub CompareFiles {
+    my ($file0,$file1) = @_;
+    my $file0Size = -s $file0;
+    my $file1Size = -s $file1;
+    my $result = 0;
+    if ( $file0Size == $file1Size ) {
+	if ( open(FILE0,$file0) ) {
+	    if ( open(FILE1,$file1) ) {
+		my $file0Data = '';
+		my $file1Data = '';
+		if ( read(FILE0,$file0Data,$file0Size) == $file0Size &&
+		     read(FILE1,$file1Data,$file1Size) == $file1Size ) {
+		    if ( $file0Data eq $file1Data ) {
+			$result = 1;
+		    }
+		}
+	    }
+	    close FILE1;
+	}
+	close FILE0;
+    }
+    return $result;
 }
 
 sub Help {
@@ -244,22 +338,35 @@ sub Help {
 scdcinepakencode [options] > <ASMFILE>
 
 [description]
-  outputs an assembly of the desired Cinepak file
+  Outputs an assembly of the desired Cinepak file to the standard output.
+
+[default usage]
+  When -custom is not specified, it uses paldata*.bin, palmap*.bin, and
+  cinepaktiledata*.bin for image frame files (these are default names
+  used by scdmoviedecode and scdcinepakencodeframe).
+
+[custom usage]
+  When -custom is specifies a PERL script, this script should call
+  &AddImgFrame(...) for each image frame.  The PCM data is automatically
+  interleaved as needed.  &AddImgFrame takes four arguments: image duration,
+  image palette filename, image palette map filename (or empty string for no
+  map), and cinepak image map filename.  The Nyan Cat demo is a simple example
+  using the custom usage.
 
 [options]
-  -silent             no audio stream
   -width=<#>          sets the pixel width of the images
   -height=<#>         sets the pixel height of the images
+  -size=<#>x<#>       sets the pixel width by height of the images
   -id=<id>            set the four character id (defaults to SEGA)
   -baserate=<#>       sets the base rate (ignored, not sure if used,
                       defaults to 600)
-  -frameduration=<#>  sets the frame duration (when not custom)
-  -custom=<file>      indicates a PERL file to customize the frames
-                      otherwise uses paldata*.bin, palmap*.bin,
-                      cinepaktiledata*.bin
+  -frameduration=<#>  sets the frame duration (only used when not custom)
   -pcmfile=<file>     pcm file, if not specified, will produce silent movie
   -pcmfd=<#>          accomodates an encoder with a different FD value
   -pcmrate=<#>        acoomadates an encoder with a different PCM data rate
+  -custom=<file>      indicates a PERL file to customize the frames
+                      otherwise uses paldata*.bin, palmap*.bin,
+                      cinepaktiledata*.bin
 
 ';
 }
