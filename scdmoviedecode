@@ -49,6 +49,7 @@ my $extractPCM = 0;
 my $extractWav = 0;
 
 my $seekCinepak = 0;
+my $seekCinepakAuto = 0;
 my $csv = 0;
 
 my @movieFiles;
@@ -65,6 +66,9 @@ my $tileDataPrefix = 'tiledata';
 foreach my $arg (@ARGV) {
     if ( $arg =~ /^-seekcinepak$/i ) {
 	$seekCinepak = 1;
+    } elsif ( $arg =~ /^-seekcinepakauto$/i ) {
+	$seekCinepak = 1;
+	$seekCinepakAuto = 1;
     } elsif ( $arg =~ /^-csv$/i ) {
 	# undocumented
 	$csv = 1;
@@ -132,6 +136,24 @@ foreach my $movieFile (@movieFiles) {
 	my $movieFileSize = -s $movieFile;
 	if ( open( MOVIE, $movieFile ) ) {
 	    binmode MOVIE;
+	    if ( $seekCinepakAuto ) {
+		# reset special flags
+		$isTomcatAlley = 0;
+		$isCodeMonkeys = 0;
+		# determine name of ISO
+		my $name = '';
+		seek(MOVIE,0x120,0);
+		read(MOVIE,$name,0x30);
+		# check name for known names with deviant cinepak formats
+		if ( $name eq ('TOMCAT ALLEY'.(' 'x0x24)) ) {
+		    $isTomcatAlley = 1;
+		} elsif ( $name eq ('SURGICAL STRIKE'.(' 'x0x21)) ||
+			  $name eq ('WIREHEAD'.(' 'x0x28)) ) {
+		    $isCodeMonkeys = 1;
+		}
+		# restore pointer to beginning of file
+		seek(MOVIE,0,0);
+	    }
 	    for ( my $movieFileOffset = 0; $movieFileOffset < $movieFileSize - 4; $movieFileOffset += 0x800 ) {
 		seek(MOVIE,$movieFileOffset,0);
 		my $film = '';
@@ -1134,6 +1156,7 @@ scdmovieencode [options] <moviefiles...>
 [options]
   -seekcinepak       search ISO on every sector boundary for a FILM header
                      and process each corresponding cinepak movie
+  -seekcinepakauto   same as seekcinepak but auto detects special formats
   -cinepak           decode as cinepak for sega format [default]
   -tomcatalley       decode as Tomcat Alley\'s deviation of cinepak
   -codemonkeys       decode as Wirehead/SurgicalStrike\'s deviation of cinepak
