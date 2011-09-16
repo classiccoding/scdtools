@@ -130,26 +130,37 @@ if ( $#movieFileOffsets < 0 ) {
     push @movieFileOffsets, 0;
 }
 
+my $isoName = '';
+my $isoDate = '';
+
 # decode movies
 foreach my $movieFile (@movieFiles) {
     if ( $seekCinepak ) {
 	my $movieFileSize = -s $movieFile;
 	if ( open( MOVIE, $movieFile ) ) {
 	    binmode MOVIE;
+	    $isoName = '';
+	    $isoDate = '';
+	    # determine name of ISO
+	    seek(MOVIE,0x150,0);
+	    read(MOVIE,$isoName,0x30);
+	    seek(MOVIE,0x50,0);
+	    read(MOVIE,$isoDate,0x08);
 	    if ( $seekCinepakAuto ) {
 		# reset special flags
 		$isTomcatAlley = 0;
 		$isCodeMonkeys = 0;
-		# determine name of ISO
-		my $name = '';
-		seek(MOVIE,0x120,0);
-		read(MOVIE,$name,0x30);
+		$isoName =~ s/\s+$//;
 		# check name for known names with deviant cinepak formats
-		if ( $name eq ('TOMCAT ALLEY'.(' 'x0x24)) ) {
+		if ( $isoName eq 'TOMCAT ALLEY' ) {
 		    $isTomcatAlley = 1;
-		} elsif ( $name eq ('SURGICAL STRIKE'.(' 'x0x21)) ||
-			  $name eq ('WIREHEAD'.(' 'x0x28)) ) {
+		} elsif ( $isoName eq 'SURGICAL STRIKE' ||
+			  $isoName eq 'WIREHEAD' ) {
 		    $isCodeMonkeys = 1;
+		} elsif ( $isoName eq 'REBEL ASSAULT' ||
+			  $isoName eq 'WING COMMANDER' ) {
+		    # does not use Cinepak but has false positives on PCM data
+		    next;
 		}
 		# restore pointer to beginning of file
 		seek(MOVIE,0,0);
@@ -159,6 +170,11 @@ foreach my $movieFile (@movieFiles) {
 		my $film = '';
 		if ( read(MOVIE,$film,4) == 4 &&
 		     $film eq 'FILM' ) {
+		    # bad PCM data, but ISO does have Cinepak files
+		    if ( $isoName eq 'THE ANIMALS (SOFTWARE TOOLWORKS)' &&
+			 $movieFileOffset == 0x08C43000 ) {
+			next;
+		    }
 		    seek(MOVIE,$movieFileOffset,0);
 		    print STDERR "$movieFile $movieFileOffset\n";
 		    &ReadCinepakForSega($movieFile,$movieFileOffset);
@@ -434,7 +450,7 @@ sub ReadCinepakForSega {
 
     my $fourCCHeader = '';
     if ( read(MOVIE,$fourCCHeader,4) != 4 ) {
-	print STDERR "not enough characters for a fourCC file\n";
+	print STDERR "not enough characters for a cinepak file\n";
 	return 0;
     }
     if ( $fourCCHeader ne 'FILM' ) {
@@ -445,10 +461,18 @@ sub ReadCinepakForSega {
     my $filmHeaderLength = 0;
 
     if ( $isCodeMonkeys ) {
-	# TODO determine from bytes 8-9
+	# FILM + 8 string bytes + 2 stab count bytes + 3 * stab entries
+	# round up to nearest sector
 	$filmHeaderLength = 0x800;
+	my $filmSampleTableLength = 0;
+	seek(MOVIE,8,1);
+	if ( read(MOVIE,$filmSampleTableLength,2) != 2 ) {
+	    print STDERR "not enough characters for a FILM header\n";
+	    return 0;
+	}
+	$filmSampleTableLength = unpack("n",$filmSampleTableLength);
+	$filmHeaderLength = 0x800*(1+int((12+2+3*$filmSampleTableLength-1)/0x800));
     } else {
-	# Sega FILM format
 	my $filmHeaderLengthString = '';
 	if ( read(MOVIE,$filmHeaderLengthString,4) != 4 ) {
 	    print STDERR "not enough characters for a FILM file\n";
@@ -484,8 +508,8 @@ sub ReadCinepakForSega {
     my $infoWastedSTABSpace = 0;
 
     if ( $isCodeMonkeys ) {
-	# TODO my $infoWastedFILMSpace = 0;
 	$filmSampleTableLength = unpack("n",substr($filmHeader,12,2));
+	$infoWastedFILMSpace = $filmHeaderLength - ( 12 + 2 + 3*$filmSampleTableLength );
     } else {
 	$filmFormatVersion = unpack("N",substr($filmHeader,0x08,4));
 
@@ -497,6 +521,7 @@ sub ReadCinepakForSega {
 	my $filmZeros = unpack("N",substr($filmHeader,0x0C,4));
 	if ( $filmZeros != 0 ) {
 	    print STDERR "expected zeros and got: ".sprintf("0x%8.8X",$filmZeros)."\n";
+	    # TODO
 	    # interleaved stab and data has stuff here...
 	    #return 0;
 	}
@@ -557,7 +582,6 @@ sub ReadCinepakForSega {
 	    seek(MOVIE,$movieFileOffset+$filmSTABOffset+0x10,0);
 	}
 
-	# Sega SATURN film has longer FDSC header
 	if ( ! ( ( $filmFormatVersion == 0x00000000 ||
 		   $filmFormatVersion == 0x00020000 ) &&
 		 ( $filmVideoCodec eq 'sega' ||
@@ -584,9 +608,16 @@ sub ReadCinepakForSega {
 
     my $pcmData = '';
     my $imageIndex = 0;
+
+    my $paletteDataLast1 = '';
+    my $paletteDataLast2 = '';
+    my $paletteMapLast1 = '';
+    my $paletteMapLast2 = '';
     my $tileDataLast1 = '';
     my $tileDataLast2 = '';
-    my $frameRate = -1;
+
+
+    my $frameDuration = -1;
     for ( my $sampleIndex = 0; $sampleIndex < $filmSampleTableLength; $sampleIndex++ ) {
 	my $sampleEntry = '';
 	my $sampleOffset = 0;
@@ -640,10 +671,10 @@ sub ReadCinepakForSega {
 	    if ( $isTomcatAlley ) {
 		$sampleInfo2 = $sampleInfo2 >> 1;
 	    }
-	    if ( $frameRate == -1 ) {
-		$frameRate = $sampleInfo2;
-	    } elsif ( $frameRate >= 0 && $frameRate != $sampleInfo2 ) {
-		$frameRate = -2;
+	    if ( $frameDuration == -1 ) {
+		$frameDuration = $sampleInfo2;
+	    } elsif ( $frameDuration >= 0 && $frameDuration != $sampleInfo2 ) {
+		$frameDuration = -2;
 	    }
 	    my $sampleStart = '';
 	    if ( read(MOVIE,$sampleStart,2) != 2 ) {
@@ -666,7 +697,9 @@ sub ReadCinepakForSega {
 	    
 	    my $sampleFlags = unpack("n",$sampleFlagsString);
 	    my $paletteCount = ( $sampleFlags & 0x0003 ) + 1;
-	    if ( ( $sampleFlags & 0xFFFC ) != 0x0020 ) {
+	    # TODO unsure what the different values mean
+	    if ( ( $sampleFlags & 0xFFFC ) != 0x0020 &&
+		 ( $sampleFlags & 0xFFFC ) != 0x2000 ) {
 		print STDERR sprintf("Unacceptible sample flags: 0x%4.4X\n",$sampleFlags);
 		return 0;
 	    }
@@ -942,11 +975,18 @@ sub ReadCinepakForSega {
 		$infoCinepakSizeScdcinepakencodeframe += $scdcinepakencodeframeSize;
 	    }
 	    
-	    if ( $tileData eq $tileDataLast1 ) {
+	    # test all image data for an unchanged frame
+	    if ( $paletteData eq $paletteDataLast1 &&
+		 $paletteMap  eq $paletteMapLast1 &&
+		 $tileData    eq $tileDataLast1 ) {
 		$infoUnchangedFrames++;
 	    }
 
-	    # double buffer data
+	    # double buffer image data
+	    $paletteDataLast2 = $paletteDataLast1;
+	    $paletteDataLast1 = $paletteData;
+	    $paletteMapLast2 = $paletteMapLast1;
+	    $paletteMapLast1 = $paletteMap;
 	    $tileDataLast2 = $tileDataLast1;
 	    $tileDataLast1 = $tileData;
 	    $imageIndex++;
@@ -956,14 +996,14 @@ sub ReadCinepakForSega {
     my $hasAudio = ( $infoAudioFrames > 0 ? 1 : 0 );
     my $hasImages = ( $infoImageFrames > 0 ? 1 : 0 );
 
-    if ( $frameRate < 0 ) {
-	$frameRate = 0;
+    if ( $frameDuration < 0 ) {
+	$frameDuration = 0;
     }
 
     &SegaCDPCMToWav(1,16276,$pcmData);
 
-    if ( $frameRate > 0 ) {
-	my $ffmpegFrameRate = ($filmFrameRateBase/$frameRate)*(16276/16000);
+    if ( $frameDuration > 0 ) {
+	my $ffmpegFrameRate = ($filmFrameRateBase/$frameDuration)*(16276/16000);
 	&WriteMovies($ffmpegFrameRate);
     }
 
@@ -972,31 +1012,34 @@ sub ReadCinepakForSega {
 	if ( $hasAudio ) {
 	    $reencodePCM = "-pcmfile=$pcmFile";
 	}
-	if ( $frameRate > 0 ) {
-	    system("scdcinepakencodeframe ${tileDataPrefix}*.bin ; scdcinepakencode -width=$filmVideoWidth -height=$filmVideoHeight -id=$filmVideoCodec -baserate=$filmFrameRateBase -frameduration=$frameRate $reencodePCM > NEW.ASM ; scdasm NEW.ASM NEW.CIN");
+	if ( $frameDuration > 0 ) {
+	    system("scdcinepakencodeframe ${tileDataPrefix}*.bin ; scdcinepakencode -width=$filmVideoWidth -height=$filmVideoHeight -id=$filmVideoCodec -baserate=$filmFrameRateBase -frameduration=$frameDuration $reencodePCM > NEW.ASM ; scdasm NEW.ASM NEW.CIN");
 	} else {
 	    print STDERR "Currently cannot handle reencoding movie files without constant frame rate, still possible though\n";
 	}
     }
 
     if ( $csv ) {
-	my $fileName = $movieFile;
-	my $fileOffset = $movieFileOffset;
+	my $fileName = '';
+	my $fileOffset = -1;
 	if ( open( PIPE, "scdisofilefromoffset \"$movieFile\" $movieFileOffset |") ) {
 	    my $line = <PIPE>;
+	    chomp $line;
 	    if ( $line =~ /^([^\;\:]+)(?:\;[^\;\:]*)?\:(\d+)\s*$/ ) {
 		$fileName = $1;
 		$fileOffset = $2;
+	    } else {
+		$fileName = $line;
+		$fileOffset = -1;
 	    }
 	}
 	close PIPE;
 	if ( ( $csv & 2 ) == 0 ) {
-	    print "ISO,ISO Offset,ISO File,ISO File Offset,Size,Width,Height,Codec,Interleaved STAB,Wasted FILM Space,Wasted STAB Space,Has Audio,Audio Frames,Audio Size,Has Images,Image Frames,Unchanged Frames,Image Size,Image Base Rate,Image Final Time,Frame Rate,Palettes,Palettes Unused,Unique Palettes,Unique Colors,4x2 Table Size,4x2 Unused Table Size,2x2 Table Size,2x2 Unused Table Size,Reusable Tiles Not Reused,Tile Data Size Uncompressed,Tile Data Size Compressed,Tile Reuse Count,Tile Uncompressed Count,Tile 4x2 Count,Tile 2x2 Count\n";
+	    print "ISO Name,ISO Date,ISO,ISO Offset,ISO File,ISO File Offset,Size,Width,Height,Codec,Interleaved STAB,Wasted FILM Space,Wasted STAB Space,Has Audio,Audio Frames,Audio Size,Has Images,Image Frames,Image Base Rate,Image Final Time,Frame Duration,Unchanged Frames,Image Size,Palettes,Palettes Unused,Unique Palettes,Unique Colors,4x2 Table Size,4x2 Unused Table Size,2x2 Table Size,2x2 Unused Table Size,Reusable Tiles Not Reused,Tile Data Size Uncompressed,Tile Data Size Compressed,Tile Reuse Count,Tile Uncompressed Count,Tile 4x2 Count,Tile 2x2 Count\n";
 	    $csv |= 2;
 	}
-	my $movieFile2 = $movieFile;
-	$movieFile2 =~ s/,/_/g;
-	print "$movieFile2,$movieFileOffset,$fileName,$fileOffset,${filmVideoWidth}x$filmVideoHeight,$filmVideoWidth,$filmVideoHeight,$filmVideoCodec,$interleavedSTABAndData,$infoWastedFILMSpace,$infoWastedSTABSpace,$hasAudio,$infoAudioFrames,$infoAudioDataSize,$hasImages,$infoImageFrames,$infoUnchangedFrames,$infoImageDataSize,$filmFrameRateBase,$frameRate,$infoLastImageFrameTime,$infoPalettes,$infoPalettesUnused,$uniquePalettes,$uniqueColors,$infoCodebook32ByteCount,$infoCodebook32Unused,$infoCodebook16ByteCount,$infoCodebook16Unused,$infoReusableTilesNotReused,$infoUncompressedSize,$infoCinepakSize,$infoMethodFlags[0],$infoMethodFlags[1],$infoMethodFlags[2],$infoMethodFlags[3]\n";
+	# TODO add in formulas R2
+	print "\"$isoName\",\"$isoDate\",\"$movieFile\",$movieFileOffset,\"$fileName\",$fileOffset,${filmVideoWidth}x$filmVideoHeight,$filmVideoWidth,$filmVideoHeight,\"$filmVideoCodec\",$interleavedSTABAndData,$infoWastedFILMSpace,$infoWastedSTABSpace,$hasAudio,$infoAudioFrames,$infoAudioDataSize,$hasImages,$infoImageFrames,$filmFrameRateBase,$infoLastImageFrameTime,$frameDuration,$infoUnchangedFrames,$infoImageDataSize,$infoPalettes,$infoPalettesUnused,$uniquePalettes,$uniqueColors,$infoCodebook32ByteCount,$infoCodebook32Unused,$infoCodebook16ByteCount,$infoCodebook16Unused,$infoReusableTilesNotReused,$infoUncompressedSize,$infoCinepakSize,$infoMethodFlags[0],$infoMethodFlags[1],$infoMethodFlags[2],$infoMethodFlags[3]\n";
     } else {
 	print "Movie file: $movieFile\n";
 	print "Movie file offset: $movieFileOffset\n";
@@ -1011,7 +1054,7 @@ sub ReadCinepakForSega {
 	my $infoImageFramesDiv = $infoImageFrames ? $infoImageFrames : 1;
 	print "Image Data Size: $infoImageDataSize (".($infoImageDataSize/$infoImageFramesDiv).")\n";
 	print "Image Base Rate: $filmFrameRateBase\n";
-	print "Image Frame Rate: $frameRate\n";
+	print "Image Frame Duration: $frameDuration\n";
 	print "Image Time: $infoLastImageFrameTime (".($infoLastImageFrameTime/$infoImageFramesDiv).")\n";
 
 	print "Palettes: $infoPalettes (".($infoPalettes/$infoImageFramesDiv).")\n";
@@ -1156,7 +1199,8 @@ scdmovieencode [options] <moviefiles...>
 [options]
   -seekcinepak       search ISO on every sector boundary for a FILM header
                      and process each corresponding cinepak movie
-  -seekcinepakauto   same as seekcinepak but auto detects special formats
+  -seekcinepakauto   same as seekcinepak but auto detects files with
+                     false positives and cinepak deviations
   -cinepak           decode as cinepak for sega format [default]
   -tomcatalley       decode as Tomcat Alley\'s deviation of cinepak
   -codemonkeys       decode as Wirehead/SurgicalStrike\'s deviation of cinepak
