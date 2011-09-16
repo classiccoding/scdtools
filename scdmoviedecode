@@ -16,7 +16,7 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 ###############################################################################
-# TODO report wasted STAB space
+# TODO report wasted data space or nonsequential space
 ###############################################################################
 
 use strict;
@@ -25,6 +25,9 @@ use warnings;
 if ( $#ARGV < 0 ) {
     &Help();
 }
+
+my $isTomcatAlley = 0;
+my $isCodeMonkeys = 0;
 
 my $extractImageData = 0;
 my $extractImagePNGs = 0;
@@ -36,12 +39,10 @@ my $optimizePalettes = 0;
 my $optimizePalettesAllowSinglePalette = 0;
 
 my $pngcrush = 0;
-# TODO only applies to cinepak
 my $ffmpeg = 0;
 # TODO only applies to cinepak
 my $reencode = 0;
 
-# TODO make option
 my $scdcinepakencodeframeCompare = 0;
 
 my $extractPCM = 0;
@@ -69,6 +70,12 @@ foreach my $arg (@ARGV) {
 	$csv = 1;
     } elsif ( $arg =~ /^-cinepak$/i ) {
 	$movieFormat = 'cinepak';
+    } elsif ( $arg =~ /^-tomcatalley$/i ) {
+	$movieFormat = 'cinepak';
+	$isTomcatAlley = 1;
+    } elsif ( $arg =~ /^-codemonkeys$/i ) {
+	$movieFormat = 'cinepak';
+	$isCodeMonkeys = 1;
     } elsif ( $arg =~ /^-stm$/i ) {
 	$movieFormat = 'stm';
     } elsif ( $arg =~ /^-sga$/i ) {
@@ -109,6 +116,11 @@ foreach my $arg (@ARGV) {
     }
 }
 
+if ( $#movieFileOffsets >= 0 && $seekCinepak ) {
+    print STDERR "Cannot specify both offsets and seekcinepak options\n";
+    &Help();
+}
+
 # default to zero offset
 if ( $#movieFileOffsets < 0 ) {
     push @movieFileOffsets, 0;
@@ -134,6 +146,9 @@ foreach my $movieFile (@movieFiles) {
 	close MOVIE;
     } else {
 	foreach my $movieFileOffset (@movieFileOffsets) {
+	    if ( $movieFileOffset =~ /^0x([0-9A-F]+)$/i ) {
+		$movieFileOffset = hex($1);
+	    }
 	    if ( open( MOVIE, $movieFile ) ) {
 		binmode MOVIE;
 		seek(MOVIE,$movieFileOffset,0);
@@ -213,37 +228,15 @@ sub ReadSTM {
 		return 0;
 	    }
 
-	    my $paletteFile = sprintf("$paletteDataPrefix%5.5d.bin",$segmentIndex*8+$imageIndex);
-	    if ( $extractImageData ) {
-		if ( open( PAL, '>'.$paletteFile ) ) {
-		    print PAL $paletteData;
-		}
-		close PAL;
-	    }
-
-	    my $imageData = '';
-	    if ( read( MOVIE, $imageData, $width*$height*32 ) != $width*$height*32 ) {
+	    my $tileData = '';
+	    if ( read( MOVIE, $tileData, $width*$height*32 ) != $width*$height*32 ) {
 		print STDERR "Bad read of tile data ($segmentIndex:$imageIndex)\n";
 		return 0;
 	    }
 
-	    my $tileDataFile = sprintf("$tileDataPrefix%5.5d.bin",$segmentIndex*8+$imageIndex);
-	    if ( $extractImageData ) {
-		if ( open( TILEDATA, '>'.$tileDataFile ) ) {
-		    print TILEDATA $imageData;
-		}
-		close TILEDATA;
-	    }
-
 	    $infoImageFrames++;
 
-	    if ( $extractImagePNGs ) {
-		my $cmd = "scdtile2img -notransparency -palfile=$paletteFile -map -width=".(8*$width)." $tileDataFile";
-		if ( $pngcrush ) {
-		    $cmd .= " -pngcrush";
-		}
-		system($cmd);
-	    }
+	    &WriteImageData($imageIndex,8*$width,$paletteData,'',$tileData,"-notransparency");
 
 	    if ( $mode == 2 ) {
 		# empty space make each frame be start on a sector boundary
@@ -261,9 +254,10 @@ sub ReadSTM {
 	$segmentIndex++;
     }
 
-    if ( $extractPCM || $extractWav ) {
-	&SegaCDPCMToWav(1,32000,$pcmData);
-    }
+    # TODO 32000 or 32552?
+    &SegaCDPCMToWav(1,int(12500000/384),$pcmData);
+
+    &WriteMovies(8);
 
     print "Audio Frames: $infoAudioFrames\n";
     print "Images Frames: $infoImageFrames\n";
@@ -384,18 +378,17 @@ sub ReadSGA {
 	}
     }
 
-    if ( $pcmData ne '' ) {
-	&SegaCDPCMToWav(1,int(12500000/384.0*$pcmFD/0x800),$pcmData);
-    }
+    &SegaCDPCMToWav(1,int(12500000/384.0*$pcmFD/0x800),$pcmData);
+
+    # TODO support &WriteMovies($r);
 
     return 1;
 }
 
 sub ReadCinepakForSega {
-    # TODO does not work with Tomcat Alley
     my ($movieFile,$movieFileOffset) = @_;
 
-    my $filmVideoCodec = '????';
+    my $filmVideoCodec = '';
     my $filmVideoHeight = 0;
     my $filmVideoWidth = 0;
 
@@ -427,21 +420,31 @@ sub ReadCinepakForSega {
 	return 0;
     }
 
-    # Sega FILM format
-    my $filmHeaderLengthString = '';
-    if ( read(MOVIE,$filmHeaderLengthString,4) != 4 ) {
-	print STDERR "not enough characters for a FILM file\n";
-	return 0;
+    my $filmHeaderLength = 0;
+
+    if ( $isCodeMonkeys ) {
+	# TODO determine from bytes 8-9
+	$filmHeaderLength = 0x800;
+    } else {
+	# Sega FILM format
+	my $filmHeaderLengthString = '';
+	if ( read(MOVIE,$filmHeaderLengthString,4) != 4 ) {
+	    print STDERR "not enough characters for a FILM file\n";
+	    return 0;
+	}
+	$filmHeaderLength = unpack("N",$filmHeaderLengthString);
+
+	if ( $filmHeaderLength < 0x10+0x14+0x10 ) {
+	    print STDERR "not enough characters for a FILM header\n";
+	    return 0;
+	}
     }
-    my $filmHeaderLength = unpack("N",$filmHeaderLengthString);
-    if ( $filmHeaderLength < 0x10+0x14+0x10 ) {
-	print STDERR "not enough characters for a FILM header\n";
-	return 0;
-    }
+
     if ( $filmHeaderLength > 500*1024*1024 ) {
 	print STDERR "FILM header length should not be extremely large: $filmHeaderLength\n";
 	return 0;
     }
+
     my $filmHeader = '';
     # revert last 8 bytes read
     seek(MOVIE,$movieFileOffset,0);
@@ -449,66 +452,105 @@ sub ReadCinepakForSega {
 	print STDERR "not enough characters for a FILM file: $filmHeaderLength\n";
 	return 0;
     }
-    my $filmFormatVersion = unpack("N",substr($filmHeader,0x08,4));
 
+    my $filmFormatVersion = 0;
     my $interleavedSTABAndData = 0;
-    if ( $filmFormatVersion == 0x00020000 ) {
-	$interleavedSTABAndData = 1;
-    }
+    my $filmFrameRateBase = 600;
+    my $filmSTABOffset = 0;
+    my $filmSampleTableLength = 0;
+    my $infoWastedFILMSpace = 0;
+    my $infoWastedSTABSpace = 0;
 
-    my $filmFDSCOffset = 0x10;
-    my $filmFDSCSignature = substr($filmHeader,$filmFDSCOffset+0x00,4);
-    if ( $filmFDSCSignature ne 'FDSC' ) {
-	print STDERR "expected FDSC signature\n";
-	return 0;
-    }
-    my $filmFDSCLength = unpack("N",substr($filmHeader,$filmFDSCOffset+0x04,4));
-    if ( $filmHeaderLength < 0x10+$filmFDSCLength+0x10 ) {
-	print STDERR "not enough characters for FDSC in FILM header\n";
-	return 0;
-    }
-    $filmVideoCodec = substr($filmHeader,$filmFDSCOffset+0x08,4);
-    $filmVideoHeight = unpack("N",substr($filmHeader,$filmFDSCOffset+0x0C,4));
-    $filmVideoWidth = unpack("N",substr($filmHeader,$filmFDSCOffset+0x10,4));
-    my $filmSTABOffset = $filmFDSCOffset+$filmFDSCLength;
-    if ( $filmSTABOffset + 16 > $filmHeaderLength ) {
-	return 0;
-    }
-    my $filmSTABSignature = substr($filmHeader,$filmSTABOffset+0x00,4);
-    if ( $filmSTABSignature ne 'STAB' ) {
-	print STDERR "expected STAB signature\n";
-	return 0;
-    }
-    my $filmSTABLength = unpack("N",substr($filmHeader,$filmSTABOffset+0x04,4));
-    if ( ! $interleavedSTABAndData &&
-	 $filmHeaderLength < 0x10+$filmFDSCLength+$filmSTABLength ) {
-	print STDERR "not enough characters for STAB in FILM header\n";
-	return 0;
-    }
-    my $filmFrameRateBase = unpack("N",substr($filmHeader,$filmSTABOffset+0x08,4));
-    my $filmSampleTableLength = unpack("N",substr($filmHeader,$filmSTABOffset+0x0C,4));
-    if ( ! $interleavedSTABAndData &&
-	 $filmSTABLength < 0x10+0x10*$filmSampleTableLength ) {
-	print STDERR "not enough characters for STAB for sample table entries $filmSTABLength $filmSampleTableLength\n";
-	return 0;
-    }
-    # TODO wasted space: $filmSTABLength - (0x10+0x10*$filmSampleTableLength)
+    if ( $isCodeMonkeys ) {
+	# TODO my $infoWastedFILMSpace = 0;
+	$filmSampleTableLength = unpack("n",substr($filmHeader,12,2));
+    } else {
+	$filmFormatVersion = unpack("N",substr($filmHeader,0x08,4));
+
+	$interleavedSTABAndData = 0;
+	if ( $filmFormatVersion == 0x00020000 ) {
+	    $interleavedSTABAndData = 1;
+	}
+
+	my $filmZeros = unpack("N",substr($filmHeader,0x0C,4));
+	if ( $filmZeros != 0 ) {
+	    print STDERR "expected zeros and got: ".sprintf("0x%8.8X",$filmZeros)."\n";
+	    # interleaved stab and data has stuff here...
+	    #return 0;
+	}
+
+	my $filmFDSCOffset = 0x10;
+	my $filmFDSCSignature = substr($filmHeader,$filmFDSCOffset+0x00,4);
+	if ( $filmFDSCSignature ne 'FDSC' ) {
+	    print STDERR "expected FDSC signature\n";
+	    return 0;
+	}
+	my $filmFDSCLength = unpack("N",substr($filmHeader,$filmFDSCOffset+0x04,4));
+	if ( $filmHeaderLength < 0x10+$filmFDSCLength+0x10 ) {
+	    print STDERR "not enough characters for FDSC in FILM header\n";
+	    return 0;
+	}
+	if ( $filmFDSCLength != 20 ) {
+	    print STDERR "expect FDSC length of 20, not $filmFDSCLength\n";
+	    return 0;
+	}
+	$filmVideoCodec = substr($filmHeader,$filmFDSCOffset+0x08,4);
+	$filmVideoHeight = unpack("N",substr($filmHeader,$filmFDSCOffset+0x0C,4));
+	$filmVideoWidth = unpack("N",substr($filmHeader,$filmFDSCOffset+0x10,4));
+	$filmSTABOffset = $filmFDSCOffset+$filmFDSCLength;
+	if ( $filmSTABOffset + 16 > $filmHeaderLength ) {
+	    print STDERR "STAB does not fit in film header length\n";
+	    return 0;
+	}
+	my $filmSTABSignature = substr($filmHeader,$filmSTABOffset+0x00,4);
+	if ( $filmSTABSignature ne 'STAB' ) {
+	    print STDERR "expected STAB signature\n";
+	    return 0;
+	}
+	my $filmSTABLength = unpack("N",substr($filmHeader,$filmSTABOffset+0x04,4));
+	if ( ! $interleavedSTABAndData &&
+	     $filmHeaderLength < 0x10+$filmFDSCLength+$filmSTABLength ) {
+	    print STDERR "not enough characters for STAB in FILM header\n";
+	    return 0;
+	}
+	$filmFrameRateBase = unpack("N",substr($filmHeader,$filmSTABOffset+0x08,4));
+	$filmSampleTableLength = unpack("N",substr($filmHeader,$filmSTABOffset+0x0C,4));
+
+	if ( $isTomcatAlley ) {
+	    $filmSampleTableLength = $filmSampleTableLength >> 1;
+	}
+
+	if ( ! $interleavedSTABAndData &&
+	     $filmSTABLength < 0x10+0x10*$filmSampleTableLength ) {
+	    print STDERR "not enough characters for STAB for sample table entries $filmSTABLength $filmSampleTableLength\n";
+	    return 0;
+	}
+
+	$infoWastedFILMSpace = $filmHeaderLength - ( 0x10+$filmFDSCLength+$filmSTABLength );
+	if ( ! $interleavedSTABAndData ) {
+	    $infoWastedSTABSpace = $filmSTABLength - ( 0x10+0x10*$filmSampleTableLength );
+	}
     
-    if ( $interleavedSTABAndData ) {
-	seek(MOVIE,$movieFileOffset+$filmSTABOffset+0x10,0);
-    }
+	if ( $interleavedSTABAndData ) {
+	    seek(MOVIE,$movieFileOffset+$filmSTABOffset+0x10,0);
+	}
 
-    # Sega SATURN film has longer FDSC header
-    if ( ! ( ( $filmFormatVersion == 0x00000000 ||
-	       $filmFormatVersion == 0x00020000 ) &&
-	     ( $filmVideoCodec eq 'sega' ||
-	       $filmVideoCodec eq 'SeGa' ||
-	       $filmVideoCodec eq 'Seg3' ||
-	       $filmVideoCodec eq 'Seg4' ||
-	       $filmVideoCodec eq 'SEGA' ||
-	       $filmVideoCodec eq (chr(0x00)x4) ) ) ) {
-	print STDERR "currently only support sega video version and codec: ".sprintf("0x%8.8X",$filmFormatVersion)." and $filmVideoCodec\n";
-	return 0;
+	# Sega SATURN film has longer FDSC header
+	if ( ! ( ( $filmFormatVersion == 0x00000000 ||
+		   $filmFormatVersion == 0x00020000 ) &&
+		 ( $filmVideoCodec eq 'sega' ||
+		   $filmVideoCodec eq 'SeGa' ||
+		   $filmVideoCodec eq 'Seg3' ||
+		   $filmVideoCodec eq 'Seg4' ||
+		   $filmVideoCodec eq 'SEGA' ||
+		   $filmVideoCodec eq (chr(0x00)x4) ) ) ) {
+	    print STDERR "currently only support sega video version and codec: ".sprintf("0x%8.8X",$filmFormatVersion)." and $filmVideoCodec\n";
+	    return 0;
+	}
+
+	if ( $filmVideoCodec eq (chr(0x00)x4) ) {
+	    $filmVideoCodec = '0x00000000';
+	}
     }
 
     my $uniquePalettes = 0;
@@ -520,25 +562,39 @@ sub ReadCinepakForSega {
 
     my $pcmData = '';
     my $imageIndex = 0;
-    my $imageDataLast1 = '';
-    my $imageDataLast2 = '';
+    my $tileDataLast1 = '';
+    my $tileDataLast2 = '';
     my $frameRate = -1;
     for ( my $sampleIndex = 0; $sampleIndex < $filmSampleTableLength; $sampleIndex++ ) {
 	my $sampleEntry = '';
-	if ( $interleavedSTABAndData ) {
-	    if ( read(MOVIE,$sampleEntry,16) != 16 ) {
-		print STDERR "Could not read interleaved STAB entry\n";
+	my $sampleOffset = 0;
+	my $sampleLength = 0;
+	my $sampleInfo1 = 0;
+	my $sampleInfo2 = 0;
+	if ( $isCodeMonkeys ) {
+	    $sampleEntry = substr($filmHeader,14+3*$sampleIndex,3);
+	    my $flags = ord(substr($sampleEntry,0,1));
+	    $sampleLength = unpack("n",substr($sampleEntry,1,2));
+	    if ( $flags & 1 ) {
+		$sampleInfo1 = 0xFFFFFFFF;
 	    }
 	} else {
-	    my $filmSampleOffset = $filmSTABOffset+0x10+0x10*$sampleIndex;
-	    $sampleEntry = substr($filmHeader,$filmSampleOffset,16);
-	}
-	my $sampleOffset = unpack("N",substr($sampleEntry,0,4));
-	my $sampleLength = unpack("N",substr($sampleEntry,4,4));
-	my $sampleInfo1 = unpack("N",substr($sampleEntry,8,4));
-	my $sampleInfo2 = unpack("N",substr($sampleEntry,12,4));
-	if ( ! $interleavedSTABAndData ) {
-	    seek(MOVIE,$movieFileOffset+$filmHeaderLength+$sampleOffset,0);
+	    if ( $interleavedSTABAndData ) {
+		if ( read(MOVIE,$sampleEntry,16) != 16 ) {
+		    print STDERR "Could not read interleaved STAB entry\n";
+		    return 0;
+		}
+	    } else {
+		my $filmSampleOffset = $filmSTABOffset+0x10+0x10*$sampleIndex;
+		$sampleEntry = substr($filmHeader,$filmSampleOffset,16);
+	    }
+	    $sampleOffset = unpack("N",substr($sampleEntry,0,4));
+	    $sampleLength = unpack("N",substr($sampleEntry,4,4));
+	    $sampleInfo1 = unpack("N",substr($sampleEntry,8,4));
+	    $sampleInfo2 = unpack("N",substr($sampleEntry,12,4));
+	    if ( ! $interleavedSTABAndData ) {
+		seek(MOVIE,$movieFileOffset+$filmHeaderLength+$sampleOffset,0);
+	    }
 	}
 	if ( $sampleInfo1 == 0xFFFFFFFF ) {
 	    # audio sample
@@ -551,7 +607,7 @@ sub ReadCinepakForSega {
 		    return 0;
 		}
 		$pcmData .= $sample;
-	    } elsif ( $interleavedSTABAndData ) {
+	    } elsif ( $isCodeMonkeys || $interleavedSTABAndData ) {
 		seek(MOVIE,$sampleLength,1);
 	    }
 	} else {
@@ -559,6 +615,9 @@ sub ReadCinepakForSega {
 	    $infoImageFrames++;
 	    $infoImageDataSize += $sampleLength;
 	    $infoLastImageFrameTime = $sampleInfo1+$sampleInfo2;
+	    if ( $isTomcatAlley ) {
+		$sampleInfo2 = $sampleInfo2 >> 1;
+	    }
 	    if ( $frameRate == -1 ) {
 		$frameRate = $sampleInfo2;
 	    } elsif ( $frameRate >= 0 && $frameRate != $sampleInfo2 ) {
@@ -573,7 +632,7 @@ sub ReadCinepakForSega {
 	    if ( $sampleStart ne 'SM' ) {
 		print STDERR "Unsupported sample start: $sampleStart: $sampleIndex\n";
 		# use next to partially allow decoding the bad Joe Montana files
-		next;
+		# next;
 		return 0;
 	    }
 	    
@@ -600,8 +659,9 @@ sub ReadCinepakForSega {
 	    my $cvidLength = unpack("N",chr(0x00).substr($cvidHeader,1,3));
 	    my $cvidWidth = unpack("n",substr($cvidHeader,4,2));
 	    my $cvidHeight = unpack("n",substr($cvidHeader,6,2));
-	    if ( $cvidWidth != int(($filmVideoWidth+7)/8) ||
-		 $cvidHeight != int(($filmVideoHeight+7)/8) ) {
+	    if ( ! $isCodeMonkeys &&
+		 ( $cvidWidth != int(($filmVideoWidth+7)/8) ||
+		   $cvidHeight != int(($filmVideoHeight+7)/8) ) ) {
 		print STDERR "Unsupported deviant cvid $filmVideoWidth $filmVideoHeight $cvidWidth $cvidHeight\n";
 	    }
 	    
@@ -637,7 +697,6 @@ sub ReadCinepakForSega {
 	    # round up to nearest double word
 	    my $paletteMapLength = 4*int(($cvidWidth*$cvidHeight+15)/16);
 	    my $paletteMap = '';
-	    my $paletteMapFile = sprintf("$paletteMapPrefix%5.5d.bin",$imageIndex);
 	    if ( $paletteCount > 1 ) {
 		if ( read(MOVIE,$paletteMap,$paletteMapLength) != $paletteMapLength ) {
 		    print STDERR "Could not read palette map data: $sampleIndex\n";
@@ -690,20 +749,6 @@ sub ReadCinepakForSega {
 		    $paletteCount = length($paletteData)/32;
 		}
 		
-		if ( $extractImageData ) {
-		    if ( open( PALMAP, '>'.$paletteMapFile ) ) {
-			print PALMAP $paletteMap;
-		    }
-		    close PALMAP;
-		}
-	    }
-	    
-	    my $paletteFile = sprintf("$paletteDataPrefix%5.5d.bin",$imageIndex);
-	    if ( $extractImageData ) {
-		if ( open( PAL, '>'.$paletteFile ) ) {
-		    print PAL $paletteData;
-		}
-		close PAL;
 	    }
 	    
 	    my $cinepakFrameSize = 0;
@@ -788,18 +833,18 @@ sub ReadCinepakForSega {
 		$codebook16Used[$i] = 0;
 	    }
 	    
-	    my $imageData = '';
+	    my $tileData = '';
 	    for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
 		my $methodFlag = $methodFlags[$tileIndex];
-		my $tileData = '';
+		my $tileDataForIndex = '';
 		if ( $methodFlag == 0 ) {
 		    if ( $imageIndex < 2 ) {
 			print STDERR "Bad double buffer\n";
 			return 0;
 		    }
-		    $tileData = substr($imageDataLast2,32*$tileIndex,32);
+		    $tileDataForIndex = substr($tileDataLast2,32*$tileIndex,32);
 		} elsif ( $methodFlag == 1 ) {
-		    if ( read(MOVIE,$tileData,32) != 32 ) {
+		    if ( read(MOVIE,$tileDataForIndex,32) != 32 ) {
 			print STDERR "Could not read tile data\n";
 			return 0;
 		    }
@@ -818,7 +863,7 @@ sub ReadCinepakForSega {
 			$codebook32Used[$c1index]++;
 			my $c0 = substr($codebook32Data,4*$c0index,4);
 			my $c1 = substr($codebook32Data,4*$c1index,4);
-			$tileData .= substr($c0,0,2).substr($c1,0,2).substr($c0,2,2).substr($c1,2,2);
+			$tileDataForIndex .= substr($c0,0,2).substr($c1,0,2).substr($c0,2,2).substr($c1,2,2);
 		    }
 		} else {
 		    my $data = '';
@@ -840,12 +885,12 @@ sub ReadCinepakForSega {
 			my $c1 = substr($codebook16Data,2*$c1index,2);
 			my $c2 = substr($codebook16Data,2*$c2index,2);
 			my $c3 = substr($codebook16Data,2*$c3index,2);
-			$tileData .= substr($c0,0,1).substr($c1,0,1).substr($c2,0,1).substr($c3,0,1).substr($c0,1,1).substr($c1,1,1).substr($c2,1,1).substr($c3,1,1);
+			$tileDataForIndex .= substr($c0,0,1).substr($c1,0,1).substr($c2,0,1).substr($c3,0,1).substr($c0,1,1).substr($c1,1,1).substr($c2,1,1).substr($c3,1,1);
 		    }
 		}
-		$imageData .= $tileData;
+		$tileData .= $tileDataForIndex;
 		if ( $methodFlag != 0 && $imageIndex >= 2 ) {
-		    if ( $tileData eq substr($imageDataLast2,32*$tileIndex,32) ) {
+		    if ( $tileDataForIndex eq substr($tileDataLast2,32*$tileIndex,32) ) {
 			$infoReusableTilesNotReused++;
 		    }
 		}
@@ -862,44 +907,26 @@ sub ReadCinepakForSega {
 		}
 	    }
 
-	    my $tileDataFile = sprintf("$tileDataPrefix%5.5d.bin",$imageIndex);
-	    if ( $extractImageData ) {
-		if ( open( TILEDATA, '>'.$tileDataFile ) ) {
-		    print TILEDATA $imageData;
-		}
-		close TILEDATA;
-	    }
-
-	    $infoUncompressedSize += length($imageData);
+	    $infoUncompressedSize += length($tileData);
 	    $infoCinepakSize += $cinepakFrameSize;
 
+	    &WriteImageData($imageIndex,8*$cvidWidth,$paletteData,$paletteMap,$tileData,'');
+
 	    if ( $scdcinepakencodeframeCompare ) {
-		system("scdcinepakencodeframe -codebooksfill $tileDataFile > /dev/null");
 		my $scdcinepakencodeframeSize = -s "cinepaktiledata00000.bin";
 		if ( $cinepakFrameSize < $scdcinepakencodeframeSize ) {
-		    print "scdcinepakencodeframeCompare: stabindex($sampleIndex) $tileDataFile original($cinepakFrameSize) scdcinepakencodeframe($scdcinepakencodeframeSize)\n";
+		    print "scdcinepakencodeframeCompare: stabindex($sampleIndex) imageindex($imageIndex) original($cinepakFrameSize) scdcinepakencodeframe($scdcinepakencodeframeSize)\n";
 		}
 		$infoCinepakSizeScdcinepakencodeframe += $scdcinepakencodeframeSize;
 	    }
-
-	    if ( $extractImagePNGs ) {
-		my $cmd = "scdtile2img -palfile=$paletteFile -map -width=".(8*$cvidWidth)." $tileDataFile";
-		if ( $pngcrush ) {
-		    $cmd .= " -pngcrush";
-		}
-		if ( $paletteCount > 1 ) {
-		    $cmd .= " -palmapcinepak=$paletteMapFile";
-		}
-		system($cmd);
-	    }
 	    
-	    if ( $imageData eq $imageDataLast1 ) {
+	    if ( $tileData eq $tileDataLast1 ) {
 		$infoUnchangedFrames++;
 	    }
 
 	    # double buffer data
-	    $imageDataLast2 = $imageDataLast1;
-	    $imageDataLast1 = $imageData;
+	    $tileDataLast2 = $tileDataLast1;
+	    $tileDataLast1 = $tileData;
 	    $imageIndex++;
 	}
     }
@@ -911,17 +938,11 @@ sub ReadCinepakForSega {
 	$frameRate = 0;
     }
 
-    if ( $extractPCM || $extractWav ) {
-	&SegaCDPCMToWav(1,16276,$pcmData);
-    }
+    &SegaCDPCMToWav(1,16276,$pcmData);
 
-    if ( $ffmpeg ) {
-	if ( $frameRate > 0 ) {
-	    my $r = ($filmFrameRateBase/$frameRate)*(16276/16000);
-	    system("ffmpeg -r $r -i ${tileDataPrefix}%05d.png -i $wavFile -acodec pcm_u8 -sameq ffmpeg.avi");
-	} else {
-	    print STDERR "Frame rate is not constant, so cannot use constant frame rate movie format\n";
-	}
+    if ( $frameRate > 0 ) {
+	my $ffmpegFrameRate = ($filmFrameRateBase/$frameRate)*(16276/16000);
+	&WriteMovies($ffmpegFrameRate);
     }
 
     if ( $reencode ) {
@@ -939,7 +960,7 @@ sub ReadCinepakForSega {
     if ( $csv ) {
 	my $fileName = $movieFile;
 	my $fileOffset = $movieFileOffset;
-	if ( open( PIPE, "~/Dropbox/scdisofilefromoffset \"$movieFile\" $movieFileOffset |") ) {
+	if ( open( PIPE, "scdisofilefromoffset \"$movieFile\" $movieFileOffset |") ) {
 	    my $line = <PIPE>;
 	    if ( $line =~ /^([^\;\:]+)(?:\;[^\;\:]*)?\:(\d+)\s*$/ ) {
 		$fileName = $1;
@@ -948,43 +969,47 @@ sub ReadCinepakForSega {
 	}
 	close PIPE;
 	if ( ( $csv & 2 ) == 0 ) {
-	    print "ISO,ISO Offset,ISO File,ISO File Offset,Size,Width,Height,Codec,Interleaved STAB,Has Audio,Audio Frames,Audio Size,Has Images,Image Frames,Unchanged Frames,Image Size,Image Base Rate,Image Final Time,Frame Rate,Palettes,Palettes Unused,Unique Palettes,Unique Colors,4x2 Table Size,4x2 Unused Table Size,2x2 Table Size,2x2 Unused Table Size,Reusable Tiles Not Reused,Tile Data Size Uncompressed,Tile Data Size Compressed,Tile Reuse Count,Tile Uncompressed Count,Tile 4x2 Count,Tile 2x2 Count\n";
+	    print "ISO,ISO Offset,ISO File,ISO File Offset,Size,Width,Height,Codec,Interleaved STAB,Wasted FILM Space,Wasted STAB Space,Has Audio,Audio Frames,Audio Size,Has Images,Image Frames,Unchanged Frames,Image Size,Image Base Rate,Image Final Time,Frame Rate,Palettes,Palettes Unused,Unique Palettes,Unique Colors,4x2 Table Size,4x2 Unused Table Size,2x2 Table Size,2x2 Unused Table Size,Reusable Tiles Not Reused,Tile Data Size Uncompressed,Tile Data Size Compressed,Tile Reuse Count,Tile Uncompressed Count,Tile 4x2 Count,Tile 2x2 Count\n";
 	    $csv |= 2;
 	}
 	my $movieFile2 = $movieFile;
 	$movieFile2 =~ s/,/_/g;
-	print "$movieFile2,$movieFileOffset,$fileName,$fileOffset,${filmVideoWidth}x$filmVideoHeight,$filmVideoWidth,$filmVideoHeight,$filmVideoCodec,$interleavedSTABAndData,$hasAudio,$infoAudioFrames,$infoAudioDataSize,$hasImages,$infoImageFrames,$infoUnchangedFrames,$infoImageDataSize,$filmFrameRateBase,$frameRate,$infoLastImageFrameTime,$infoPalettes,$infoPalettesUnused,$uniquePalettes,$uniqueColors,$infoCodebook32ByteCount,$infoCodebook32Unused,$infoCodebook16ByteCount,$infoCodebook16Unused,$infoReusableTilesNotReused,$infoUncompressedSize,$infoCinepakSize,$infoMethodFlags[0],$infoMethodFlags[1],$infoMethodFlags[2],$infoMethodFlags[3]\n";
+	print "$movieFile2,$movieFileOffset,$fileName,$fileOffset,${filmVideoWidth}x$filmVideoHeight,$filmVideoWidth,$filmVideoHeight,$filmVideoCodec,$interleavedSTABAndData,$infoWastedFILMSpace,$infoWastedSTABSpace,$hasAudio,$infoAudioFrames,$infoAudioDataSize,$hasImages,$infoImageFrames,$infoUnchangedFrames,$infoImageDataSize,$filmFrameRateBase,$frameRate,$infoLastImageFrameTime,$infoPalettes,$infoPalettesUnused,$uniquePalettes,$uniqueColors,$infoCodebook32ByteCount,$infoCodebook32Unused,$infoCodebook16ByteCount,$infoCodebook16Unused,$infoReusableTilesNotReused,$infoUncompressedSize,$infoCinepakSize,$infoMethodFlags[0],$infoMethodFlags[1],$infoMethodFlags[2],$infoMethodFlags[3]\n";
     } else {
 	print "Movie file: $movieFile\n";
 	print "Movie file offset: $movieFileOffset\n";
 	print "FILM Header: ${filmVideoWidth}x${filmVideoHeight} Codec($filmVideoCodec)\n";
 	print "Interleaved STAB/Data: $interleavedSTABAndData\n";
+	print "Wasted FILM Space: $infoWastedFILMSpace\n";
+	print "Wasted STAB Space: $infoWastedSTABSpace\n";
 	print "Audio Frames: $infoAudioFrames\n";
 	print "Audio Data Size: $infoAudioDataSize\n";
 	print "Images Frames: $infoImageFrames\n";
 	print "Unchanged Frames: $infoUnchangedFrames\n";
-	print "Image Data Size: $infoImageDataSize (".($infoImageDataSize/$infoImageFrames).")\n";
+	my $infoImageFramesDiv = $infoImageFrames ? $infoImageFrames : 1;
+	print "Image Data Size: $infoImageDataSize (".($infoImageDataSize/$infoImageFramesDiv).")\n";
 	print "Image Base Rate: $filmFrameRateBase\n";
 	print "Image Frame Rate: $frameRate\n";
-	print "Image Time: $infoLastImageFrameTime (".($infoLastImageFrameTime/$infoImageFrames).")\n";
+	print "Image Time: $infoLastImageFrameTime (".($infoLastImageFrameTime/$infoImageFramesDiv).")\n";
 
-	print "Palettes: $infoPalettes (".($infoPalettes/$infoImageFrames).")\n";
-	print "PalettesUnused: $infoPalettesUnused (".($infoPalettesUnused/$infoImageFrames).")\n";
+	print "Palettes: $infoPalettes (".($infoPalettes/$infoImageFramesDiv).")\n";
+	print "PalettesUnused: $infoPalettesUnused (".($infoPalettesUnused/$infoImageFramesDiv).")\n";
 	print "Unique Palettes: $uniquePalettes\n";
 	print "Unique Colors: $uniqueColors\n";
-	print "Codebook32ByteCount: $infoCodebook32ByteCount (".($infoCodebook32ByteCount/$infoImageFrames).")\n";
-	print "Codebook32Unused: $infoCodebook32Unused (".($infoCodebook32Unused/$infoImageFrames).")\n";
-	print "Codebook16ByteCount: $infoCodebook16ByteCount (".($infoCodebook16ByteCount/$infoImageFrames).")\n";
-	print "Codebook16Unused: $infoCodebook16Unused (".($infoCodebook16Unused/$infoImageFrames).")\n";
-	print "Resusable Tiles Not Reused: $infoReusableTilesNotReused (".($infoReusableTilesNotReused/$infoImageFrames).")\n";
-	print "cinepak uncompressed: $infoUncompressedSize (".($infoUncompressedSize/$infoImageFrames).")\n";
-	print "cinepak compressed: $infoCinepakSize (".($infoCinepakSize/$infoImageFrames).") compressionratio(".($infoCinepakSize/$infoUncompressedSize).")\n";
+	print "Codebook32ByteCount: $infoCodebook32ByteCount (".($infoCodebook32ByteCount/$infoImageFramesDiv).")\n";
+	print "Codebook32Unused: $infoCodebook32Unused (".($infoCodebook32Unused/$infoImageFramesDiv).")\n";
+	print "Codebook16ByteCount: $infoCodebook16ByteCount (".($infoCodebook16ByteCount/$infoImageFramesDiv).")\n";
+	print "Codebook16Unused: $infoCodebook16Unused (".($infoCodebook16Unused/$infoImageFramesDiv).")\n";
+	print "Resusable Tiles Not Reused: $infoReusableTilesNotReused (".($infoReusableTilesNotReused/$infoImageFramesDiv).")\n";
+	print "cinepak uncompressed: $infoUncompressedSize (".($infoUncompressedSize/$infoImageFramesDiv).")\n";
+	my $infoUncompressedSizeDiv = $infoUncompressedSize ? $infoUncompressedSize : 1;
+	print "cinepak compressed: $infoCinepakSize (".($infoCinepakSize/$infoImageFramesDiv).") compressionratio(".($infoCinepakSize/$infoUncompressedSizeDiv).")\n";
 	if ( $scdcinepakencodeframeCompare ) {
-	    print "scdcinepakencodeframe: $infoCinepakSizeScdcinepakencodeframe (".($infoCinepakSizeScdcinepakencodeframe/$infoImageFrames).") compressionratio(".($infoCinepakSizeScdcinepakencodeframe/$infoUncompressedSize).")\n";
+	    print "scdcinepakencodeframe: $infoCinepakSizeScdcinepakencodeframe (".($infoCinepakSizeScdcinepakencodeframe/$infoImageFramesDiv).") compressionratio(".($infoCinepakSizeScdcinepakencodeframe/$infoUncompressedSizeDiv).")\n";
 	}
 	print "MethodFlags:";
 	foreach my $i (0..3) {
-	    print ' '.$infoMethodFlags[$i].' ('.($infoMethodFlags[$i]/$infoImageFrames).') ';
+	    print ' '.$infoMethodFlags[$i].' ('.($infoMethodFlags[$i]/$infoImageFramesDiv).') ';
 	}
 	print "\n";
     }
@@ -993,47 +1018,109 @@ sub ReadCinepakForSega {
 sub SegaCDPCMToWav {
     my ($wavChannels,$wavSampleRate,$pcmData) = @_;
 
-    if ( $extractPCM ) {
-	open( PCM, '>'.$pcmFile );
-	print PCM $pcmData;
-	close PCM;
-    }
-
-    if ( $extractWav ) {
-	if ( ! open( WAV, '>'.$wavFile ) ) {
-	    print STDERR "Could not open $wavFile\n";
-	    return 0;
+    if ( $pcmData ne '' ) {
+	if ( $extractPCM ) {
+	    open( PCM, '>'.$pcmFile );
+	    print PCM $pcmData;
+	    close PCM;
 	}
-	binmode WAV;
-	my $wavCompression = 1;
-	my $wavAverageBytesPerSecond = $wavSampleRate*$wavChannels;
-	my $wavBlockAlign = $wavChannels;
-	my $wavSignificantBitsPerSample = 8;
-	my $pcmDataLength = length($pcmData);
-	my $wavData = ('RIFF'.pack("V",$pcmDataLength+36).'WAVE'.'fmt '.pack("V",16).pack("v",$wavCompression).pack("v",$wavChannels).pack("V",$wavSampleRate).pack("V",$wavAverageBytesPerSecond).pack("v",$wavBlockAlign).pack("v",$wavSignificantBitsPerSample).'data'.pack("V",$pcmDataLength));
-	for ( my $i = 0; $i < $pcmDataLength; $i++ ) {
-	    # convert from sign/magnitude to unsigned
-	    my $valueSM = ord(substr($pcmData,$i,1));
-	    if ( $valueSM == 0xFF ) {
-		print STDERR "seeing end of PCM flag ($i)\n";
+
+	if ( $extractWav ) {
+	    if ( ! open( WAV, '>'.$wavFile ) ) {
+		print STDERR "Could not open $wavFile\n";
 		return 0;
 	    }
-	    my $value;
-	    if ( $valueSM & 0x80 ) {
-		$value = 0x80 - ( $valueSM & 0x7F );
-	    } else {
-		$value = 0x80 + ( $valueSM & 0x7F );
+	    binmode WAV;
+	    my $wavCompression = 1;
+	    my $wavAverageBytesPerSecond = $wavSampleRate*$wavChannels;
+	    my $wavBlockAlign = $wavChannels;
+	    my $wavSignificantBitsPerSample = 8;
+	    my $pcmDataLength = length($pcmData);
+	    my $wavData = ('RIFF'.pack("V",$pcmDataLength+36).'WAVE'.'fmt '.pack("V",16).pack("v",$wavCompression).pack("v",$wavChannels).pack("V",$wavSampleRate).pack("V",$wavAverageBytesPerSecond).pack("v",$wavBlockAlign).pack("v",$wavSignificantBitsPerSample).'data'.pack("V",$pcmDataLength));
+	    for ( my $i = 0; $i < $pcmDataLength; $i++ ) {
+		# convert from sign/magnitude to unsigned
+		my $valueSM = ord(substr($pcmData,$i,1));
+		if ( $valueSM == 0xFF ) {
+		    print STDERR "seeing end of PCM flag ($i)\n";
+		    return 0;
+		}
+		my $value;
+		if ( $valueSM & 0x80 ) {
+		    $value = 0x80 - ( $valueSM & 0x7F );
+		} else {
+		    $value = 0x80 + ( $valueSM & 0x7F );
+		}
+		$wavData .= chr( $value );
 	    }
-	    $wavData .= chr( $value );
+	    if ( $pcmDataLength & 1 ) {
+		# add unused byte if end on odd byte address
+		$wavData .= chr(0x00);
+	    }
+	    print WAV $wavData;
+	    close WAV;
 	}
-	if ( $pcmDataLength & 1 ) {
-	    # add unused byte if end on odd byte address
-	    $wavData .= chr(0x00);
-	}
-	print WAV $wavData;
-	close WAV;
     }
 }
+
+sub _Write_PaletteData_Or_PaletteMap_TileData_ {
+    my ($prefix,$index,$data) = @_;
+    my $file = '';
+    if ( $data ne '' &&
+	 $extractImageData ) {
+	$file = sprintf("%s%5.5d.bin",$prefix,$index);
+	if ( open( WRITEDATA, '>'.$file ) ) {
+	    print WRITEDATA $data;
+	}
+	close WRITEDATA;
+    }
+    return $file;
+}
+
+sub WritePaletteData {
+    &_Write_PaletteData_Or_PaletteMap_TileData_($paletteDataPrefix,@_);
+}
+
+sub WritePaletteMap {
+    &_Write_PaletteData_Or_PaletteMap_TileData_($paletteMapPrefix,@_);
+}
+
+sub WriteTileData {
+    &_Write_PaletteData_Or_PaletteMap_TileData_($tileDataPrefix,@_);
+}
+
+sub WriteImageData {
+    my ($index,$width,$paletteData,$paletteMap,$tileData,$scdtile2imgArgs) = @_;
+
+    my $paletteDataFile = &WritePaletteData($index,$paletteData);
+    my $paletteMapFile = &WritePaletteMap($index,$paletteMap);
+    my $tileDataFile = &WriteTileData($index,$tileData);
+
+    if ( $extractImagePNGs ) {
+	my $cmd = "scdtile2img $scdtile2imgArgs -palfile=$paletteDataFile -map -width=$width $tileDataFile";
+	if ( $pngcrush ) {
+	    $cmd .= " -pngcrush";
+	}
+	if ( $paletteMapFile ne '' ) {
+	    $cmd .= " -palmapcinepak=$paletteMapFile";
+	}
+	system($cmd);
+    }
+
+    if ( $scdcinepakencodeframeCompare ) {
+	system("scdcinepakencodeframe -codebooksfill $tileDataFile > /dev/null");
+    }
+}
+
+sub WriteMovies {
+    my ($ffmpegFrameRate) = @_;
+
+    # TODO -aspect 4:3 for 256x224 32 column movies
+    # TODO could even find ratio for other sizes with some math...
+    if ( $ffmpeg ) {
+	system("ffmpeg -r $ffmpegFrameRate -i ${tileDataPrefix}%05d.png -i $wavFile -acodec pcm_u8 -sameq ffmpeg.avi");
+    }
+}
+
 
 sub Help {
     die '
@@ -1048,6 +1135,8 @@ scdmovieencode [options] <moviefiles...>
   -seekcinepak       search ISO on every sector boundary for a FILM header
                      and process each corresponding cinepak movie
   -cinepak           decode as cinepak for sega format [default]
+  -tomcatalley       decode as Tomcat Alley\'s deviation of cinepak
+  -codemonkeys       decode as Wirehead/SurgicalStrike\'s deviation of cinepak
   -stm               decode as Sonic CD\'s OPN.STM format
   -sga               decode as SGA format
   -extractimagedata  extract paldata*.bin, palmap*.bin, and tiledata*.bin
@@ -1060,6 +1149,7 @@ scdmovieencode [options] <moviefiles...>
   -scdcinepakencodeframecompare
                      compare file compression with scdcinepakencodeframe
   -offset=<#>        offset into file
+  -csv               outputs seekcinepak data as csv for cinepak spreadsheet
 
 ';
 
