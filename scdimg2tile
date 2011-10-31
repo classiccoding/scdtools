@@ -46,6 +46,7 @@ my $compress = 0;
 my $magicPink = 0;
 my $magicBlack = 0;
 my $labels = 1;
+my $bin = 0;
 
 my @imgFiles;
 
@@ -83,6 +84,9 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-magicblack$/i ) {
 	$magicBlack = 1;
     } elsif ( $arg =~ /^-nolabels$/i ) {
+	$labels = 0;
+    } elsif ( $arg =~ /^-bin$/i ) {
+	$bin = 1;
 	$labels = 0;
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
 	$verbosity = $1;
@@ -125,14 +129,26 @@ if ( $paletteGet ) {
 	print STDERR "Too many colors for one palette (will use most frequent colors)\n";
     }
     for ( my $paletteIndex = 0; $paletteIndex < $paletteCount; $paletteIndex++ ) {
-	print ";; palette\n";
-	print " dc.w 0x0000\n";
+	if ( $bin ) {
+	    print pack("n",0x0000);
+	} else {   
+	    print ";; palette\n";
+	    print " dc.w 0x0000\n";
+	}
 	for ( my $i = 0; $i < 15; $i++ ) {
 	    my $colorsIndex = $paletteIndex * 15 + $i;
 	    if ( $colorsIndex <= $#colors ) {
-		print ' dc.w '.$colors[$colorsIndex]."\n";
+		if ( $bin ) {
+		    print pack("n",$colors[$colorsIndex]);
+		} else {
+		    print ' dc.w '.$colors[$colorsIndex]."\n";
+		}
 	    } else {
-		print " dc.w 0x0000\n";
+		if ( $bin ) {
+		    print pack("n",0x0000);
+		} else {
+		    print " dc.w 0x0000\n";
+		}
 	    }
 	}
     }
@@ -165,10 +181,12 @@ sub Img2Tile($) {
 
     my $w = $width / 8;
     my $h = $height / 8;
-    if ( $map ) {
-	print " ;; map (${w}x${h})\n";
-    } else {
-	print " ;; sprite ordering from (${w}x${h})\n";
+    if ( ! $bin ) {
+	if ( $map ) {
+	    print " ;; map (${w}x${h})\n";
+	} else {
+	    print " ;; sprite ordering from (${w}x${h})\n";
+	}
     }
 
     if ( $labels && ( $showMap || $showTiles ) ) {
@@ -187,12 +205,20 @@ sub Img2Tile($) {
 		$map .= chr($tileUsed);
 	    }
 	    if ( $showMap ) {
-		print " dc.b ";
-		for ( my $i = 0; $i < length($map); $i++ ) {
-		    print ',' if $i;
-		    printf("\$%2.2X",ord(substr($map,$i,1)));
+		if ( ! $bin ) {
+		    print " dc.b ";
 		}
-		print "\n";
+		for ( my $i = 0; $i < length($map); $i++ ) {
+		    if ( $bin ) {
+			print substr($map,$i,1);
+		    } else {
+			print ',' if $i;
+			printf("\$%2.2X",ord(substr($map,$i,1)));
+		    }
+		}
+		if ( ! $bin ) {
+		    print "\n";
+		}
 		if ( $labels && $y == 0 ) {
 		    print "StartRow${imgLabel}Map:\n";
 		}
@@ -214,21 +240,31 @@ sub Img2Tile($) {
 	if ( $labels ) {
 	    print "Start${imgLabel}Tiles:\n";
 	}
-	if ( $compress ) {
+	if ( ! $bin && $compress ) {
 	    print " ;; compressed $compress\n";
 	}
 	for ( my $tileIndex = 0; $tileIndex <= $#tiles; $tileIndex++ ) {
-	    printf(" ;; tile \$%2.2X\n",$tileIndex+$mapOffset);
+	    if ( ! $bin ) {
+		printf(" ;; tile \$%2.2X\n",$tileIndex+$mapOffset);
+	    }
 	    if ( $compress == 0 ) {
 		for ( my $i = 0; $i < length($tiles[$tileIndex]); $i += 4 ) {
-		    printf(" dc.l \$%8.8X\n",unpack("N",substr($tiles[$tileIndex],$i,4)));
+		    if ( $bin ) {
+			print substr($tiles[$tileIndex],$i,4);
+		    } else {
+			printf(" dc.l \$%8.8X\n",unpack("N",substr($tiles[$tileIndex],$i,4)));
+		    }
 		}
 	    } elsif ( $compress == 1 ) {
 		for ( my $i = 0; $i < length($tiles[$tileIndex]); $i += 4 ) {
 		    my $v0 = unpack("n",substr($tiles[$tileIndex],$i,2));
 		    my $v1 = unpack("n",substr($tiles[$tileIndex],$i+2,2));
 		    my $value = $v0 | ( $v1 << 2 );
-		    printf(" dc.w \$%4.4X\n",$value);
+		    if ( $bin ) {
+			print pack("n",$value);
+		    } else {
+			printf(" dc.w \$%4.4X\n",$value);
+		    }
 		}
 	    } elsif ( $compress == 2 ) {
 		for ( my $i = 0; $i < length($tiles[$tileIndex]); $i += 8 ) {
@@ -237,7 +273,11 @@ sub Img2Tile($) {
 		    my $v2 = unpack("n",substr($tiles[$tileIndex],$i+4,2));
 		    my $v3 = unpack("n",substr($tiles[$tileIndex],$i+6,2));
 		    my $value = $v0 | ( $v1 << 1 ) | ( $v2 << 2 ) | ( $v3 << 3 );
-		    printf(" dc.w \$%4.4X\n",$value);
+		    if ( $bin ) {
+			print pack("n",$value);
+		    } else {
+			printf(" dc.w \$%4.4X\n",$value);
+		    }
 		}
 	    } else {
 		die "Unsupported compress argument\n";
@@ -357,6 +397,7 @@ scdimg2tile [options] <imgfiles...>
   -magicpink          treat #FF00FF as transparent
   -magicblack         treat #000000 as transparent
   -nolabels           do not print any labels in out
+  -bin                output binary instead of assembly
   -v=<#>              specify verbosity
 
 ';

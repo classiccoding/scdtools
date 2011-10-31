@@ -51,6 +51,8 @@ my $pcmFramePrefix = 'pcmchunk';
 
 my $customEncodingFile = '';
 
+my $singlePalette = '';
+
 # parse args
 foreach my $arg (@ARGV) {
     if ( $arg =~ /^-width=(\d+)$/i ) {
@@ -74,6 +76,8 @@ foreach my $arg (@ARGV) {
         $pcmFD = $1;
     } elsif ( $arg =~ /^-pcmrate=(.+)$/i ) {
 	$pcmDataRate = $1;
+    } elsif ( $arg =~ /^-singlepalette=(.+)$/i ) {
+	$singlePalette = $1;
     } else {
 	print STDERR "\nCould not parse argument: $arg\n";
 	&Help();
@@ -155,8 +159,12 @@ if ( $customEncodingFile ne '' ) {
     my @cinepaktiledatas = sort <cinepaktiledata*.bin>;
     my $palmapsCount = $#palmaps+1;
     for ( my $i = 0; $i <= $#cinepaktiledatas; $i++ ) {
-	my $palmap = $i < $palmapsCount ? $palmaps[$i] : '';
-	&AddImgFrame($cinepakFrameDuration,$paldatas[$i],$palmap,$cinepaktiledatas[$i]);
+	if ( $singlePalette ) {
+	    &AddImgFrame($cinepakFrameDuration,$singlePalette,'',$cinepaktiledatas[$i]);
+	} else {
+	    my $palmap = $i < $palmapsCount ? $palmaps[$i] : '';
+	    &AddImgFrame($cinepakFrameDuration,$paldatas[$i],$palmap,$cinepaktiledatas[$i]);
+	}
     }
 }
 
@@ -311,24 +319,28 @@ sub AddImgFrame {
 
 sub CompareFiles {
     my ($file0,$file1) = @_;
-    my $file0Size = -s $file0;
-    my $file1Size = -s $file1;
     my $result = 0;
-    if ( $file0Size == $file1Size ) {
-	if ( open(FILE0,$file0) ) {
-	    if ( open(FILE1,$file1) ) {
-		my $file0Data = '';
-		my $file1Data = '';
-		if ( read(FILE0,$file0Data,$file0Size) == $file0Size &&
-		     read(FILE1,$file1Data,$file1Size) == $file1Size ) {
-		    if ( $file0Data eq $file1Data ) {
-			$result = 1;
+    if ( $file0 eq $file1 ) {
+	$result = 1;
+    } else {
+	my $file0Size = -s $file0;
+	my $file1Size = -s $file1;
+	if ( $file0Size == $file1Size ) {
+	    if ( open(FILE0,$file0) ) {
+		if ( open(FILE1,$file1) ) {
+		    my $file0Data = '';
+		    my $file1Data = '';
+		    if ( read(FILE0,$file0Data,$file0Size) == $file0Size &&
+			 read(FILE1,$file1Data,$file1Size) == $file1Size ) {
+			if ( $file0Data eq $file1Data ) {
+			    $result = 1;
+			}
 		    }
 		}
+		close FILE1;
 	    }
-	    close FILE1;
+	    close FILE0;
 	}
-	close FILE0;
     }
     return $result;
 }
@@ -354,19 +366,20 @@ scdcinepakencode [options] > <ASMFILE>
   using the custom usage.
 
 [options]
-  -width=<#>          sets the pixel width of the images
-  -height=<#>         sets the pixel height of the images
-  -size=<#>x<#>       sets the pixel width by height of the images
-  -id=<id>            set the four character id (defaults to SEGA)
-  -baserate=<#>       sets the base rate (ignored, not sure if used,
-                      defaults to 600)
-  -frameduration=<#>  sets the frame duration (only used when not custom)
-  -pcmfile=<file>     pcm file, if not specified, will produce silent movie
-  -pcmfd=<#>          accomodates an encoder with a different FD value
-  -pcmrate=<#>        acoomadates an encoder with a different PCM data rate
-  -custom=<file>      indicates a PERL file to customize the frames
-                      otherwise uses paldata*.bin, palmap*.bin,
-                      cinepaktiledata*.bin
+  -width=<#>             sets the pixel width of the images
+  -height=<#>            sets the pixel height of the images
+  -size=<#>x<#>          sets the pixel width by height of the images
+  -id=<id>               set the four character id (defaults to SEGA)
+  -baserate=<#>          sets the base rate (ignored, not sure if used,
+                         defaults to 600)
+  -frameduration=<#>     sets the frame duration (only used when not custom)
+  -pcmfile=<file>        pcm file, if not specified, will produce silent movie
+  -pcmfd=<#>             accomodates an encoder with a different FD value
+  -pcmrate=<#>           acoomadates an encoder with a different PCM data rate
+  -singlepalette=<file>  all files use the same single palette
+  -custom=<file>         indicates a PERL file to customize the frames
+                         otherwise uses paldata*.bin, palmap*.bin,
+                         cinepaktiledata*.bin
 
 ';
 }

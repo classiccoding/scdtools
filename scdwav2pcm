@@ -204,10 +204,10 @@ for ( my $i = $channel; $i < $chunkLength; $i += $fmtNumberOfChannels ) {
 	$value = $valueWave - 0x80;
     } else {
 	$value = 0x80 | ( 0x80 - $valueWave );
-	if ( $value == 0xFF ) {
-	    print STDERR "truncating waveform\n";
-	    $value = 0xFE;
-	}
+    }
+    if ( $value == 0xFF ) {
+	print STDERR "truncating waveform\n";
+	$value = 0xFE;
     }
     $pcmData .= chr($value);
 }
