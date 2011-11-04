@@ -34,6 +34,7 @@ my $verbosity = 2;
 
 my $magicPink = 0;
 my $magicBlack = 0;
+my $grey = 0;
 
 my @imgFiles;
 
@@ -42,6 +43,8 @@ foreach my $arg (@ARGV) {
 	$magicPink = 1;
     } elsif ( $arg =~ /^-magicblack$/i ) {
 	$magicBlack = 1;
+    } elsif ( $arg =~ /^-gr[ae]y$/i ) {
+	$grey = 1;
     } elsif ( -e $arg ) {
 	push @imgFiles, $arg;
     } else {
@@ -69,7 +72,7 @@ sub ImgExtractColors($) {
     my $img = Image::Magick->new();
     my $x = $img->ReadImage($imgFile);
     warn $x if $x;
-    $img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
+    #$img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
 
     my @colors = &GetSegaColors($img);
     my $colorsLength = $#colors + 1;
@@ -91,7 +94,7 @@ sub ImgExtractColors($) {
     }
     
     if ( $colorsLength > 16 ) {
-	$img->Remap('image'=>$imgPalette,dither=>'false');
+	$img->Remap('image'=>$imgPalette,dither=>'true');
 
 	$img->Write('a0.png');
 
@@ -132,13 +135,13 @@ sub ImgExtractColors($) {
 	$img = Image::Magick->new();
 	$x = $img->ReadImage($imgFile);
 	warn $x if $x;
-	$img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
+	#$img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
     }
 
     $img->Write('a2.png');
 
     #$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
-    $img->Remap('image'=>$imgPalette,dither=>'false');
+    $img->Remap('image'=>$imgPalette,dither=>'true');
 
     $img->Write('a3.png');
 }
@@ -156,8 +159,17 @@ sub GetSegaColors {
 	for ( my $x = 0; $x < $width; $x++ ) {
 	    # process two pixels for a hi and lo nibble
 	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
-	    my $a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x,'y'=>$y);
-	    my $color = chr(int(255*$b>>5)<<1).chr((int(255*$g>>5)<<5)|(int(255*$r>>5)<<1));
+	    my $a = 0;
+	    if ( $alpha ) {
+		$a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x,'y'=>$y);
+	    }
+	    my $color;
+	    if ( $grey ) {
+		my $avg = int((85*($r+$g+$b))>>5);
+		$color = chr($avg<<1).chr(($avg<<5)|($avg<<1));
+	    } else {
+		$color = chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
+	    }
 	    if ( ( $alpha && defined $a && $a == 1 ) ||
 		 ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
 		 ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
@@ -181,6 +193,7 @@ scdimgvdppalette [options] <imgfiles>
 [options]
   -magicpink          treat #FF00FF as transparent
   -magicblack         treat #000000 as transparent
+  -grey               averages colors for using greyscale palette
 
 ';
 }

@@ -47,6 +47,7 @@ my $magicPink = 0;
 my $magicBlack = 0;
 my $labels = 1;
 my $bin = 0;
+my $grey = 0;
 
 my @imgFiles;
 
@@ -88,6 +89,8 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-bin$/i ) {
 	$bin = 1;
 	$labels = 0;
+    } elsif ( $arg =~ /^-gr[ae]y$/i ) {
+	$grey = 1;
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
 	$verbosity = $1;
     } elsif ( -e $arg ) {
@@ -139,9 +142,10 @@ if ( $paletteGet ) {
 	    my $colorsIndex = $paletteIndex * 15 + $i;
 	    if ( $colorsIndex <= $#colors ) {
 		if ( $bin ) {
-		    print pack("n",$colors[$colorsIndex]);
+		    print $colors[$colorsIndex];
 		} else {
-		    print ' dc.w '.$colors[$colorsIndex]."\n";
+		    my $colorf = sprintf("0x%4.4X",unpack("n",$colors[$colorsIndex]));
+		    print ' dc.w '.$colorf."\n";
 		}
 	    } else {
 		if ( $bin ) {
@@ -153,9 +157,10 @@ if ( $paletteGet ) {
 	}
     }
 } else {
-    foreach my $c (@colors) {
-	my $count = $missingColors{$c};
-	print STDERR "Palette does not contain color: $c ($count)\n";
+    foreach my $color (@colors) {
+	my $count = $missingColors{$color};
+	my $colorf = sprintf("0x%4.4X",unpack("n",$color));
+	print STDERR "Palette does not contain color: $colorf ($count)\n";
     }
 }
 
@@ -179,9 +184,34 @@ sub Img2Tile($) {
     my $width = $img->Get('width');
     my $height = $img->Get('height');
 
+    # TODO an attempt to look at dithering
+    my $dither = 0;
+    if ( $dither ) {
+	my $colorsLength = length($paletteData)>>1;
+
+	my $imgPalette = Image::Magick->new();
+	$imgPalette->Set(size=>"${colorsLength}x1");
+	$x = $imgPalette->ReadImage('xc:black');
+	warn $x if $x;
+
+	for ( my $x = 0; $x < $colorsLength; $x++ ) {
+	    my $c = substr($paletteData,$x*2,2);
+	    my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
+			   ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
+			   (   ord(substr($c,1,1))        & 0xE ) / 14 );
+	    for ( my $i = 0; $i < 3; $i++ ) {
+		$pixels[$i] = $pixels[$i]*0.95 + 0.025;
+	    }
+	    $imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
+	}
+    
+	#$img->Remap('image'=>$imgPalette,'dither'=>'true','dither-method'=>'Riemersma');
+	$img->Remap('image'=>$imgPalette,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
+    }
+
     my $w = $width / 8;
     my $h = $height / 8;
-    if ( ! $bin ) {
+    if ( ! $bin && ! $paletteGet ) {
 	if ( $map ) {
 	    print " ;; map (${w}x${h})\n";
 	} else {
@@ -201,8 +231,7 @@ sub Img2Tile($) {
 	for ( my $y = 0; $y < $height; $y += 8 ) {
 	    my $map;
 	    for ( my $x = 0; $x < $width; $x += 8 ) {
-		my $tileUsed = &ReadImgTile($x,$y);
-		$map .= chr($tileUsed);
+		$map .= chr(&ReadImgTile($x,$y));
 	    }
 	    if ( $showMap ) {
 		if ( ! $bin ) {
@@ -320,17 +349,30 @@ sub ReadPalette {
 sub ReadImgTile {
     my ($x,$y) = @_;
     my $tile = '';
+    my $a = 0;
+    my $y2;
+    my $x2;
+    my $i;
+    my $valueHi;
+    my $valueLo;
+    my $tileUsed = -1;
     for ( my $subrow = 0; $subrow < 8; $subrow++ ) {
 	# process each of the resulting four bytes
-	for ( my $i = 0; $i < 4; $i++ ) {
+	$y2 = $y+$subrow;
+	for ( $i = 0; $i < 4; $i++ ) {
+	    $x2 = $x+2*$i;
 	    # process two pixels for a hi and lo nibble
-	    my $valueHi = &GetPaletteIndex(($img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>($x+2*$i+0),'y'=>($y+$subrow)),$img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>($x+2*$i+0),'y'=>($y+$subrow))));
-	    my $valueLo = &GetPaletteIndex(($img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>($x+2*$i+1),'y'=>($y+$subrow)),$img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>($x+2*$i+1),'y'=>($y+$subrow))));
-	    my $segaValue = ( $valueHi << 4 ) | $valueLo;
-	    $tile .= chr($segaValue);
+	    if ( $alpha ) {
+		$a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x2,'y'=>$y2);
+	    }
+	    $valueHi = &GetPaletteIndex($img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x2,'y'=>$y2),$a);
+	    if ( $alpha ) {
+		$a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>($x2+1),'y'=>$y2);
+	    }
+	    $valueLo = &GetPaletteIndex($img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>($x2+1),'y'=>$y2),$a);
+	    $tile .= chr(( $valueHi << 4 ) | $valueLo);
 	}
     }
-    my $tileUsed = -1;
     # for sprites, do not reuse existing tiles
     if ( $map && ! $sequentialMap ) {
 	for ( my $tileIndex = 0; $tileIndex <= $#tiles; $tileIndex++ ) {
@@ -347,32 +389,54 @@ sub ReadImgTile {
     return $tileUsed;
 }
 
+# performance
+my %cacheGetPaletteIndex;
 
 # convert a normalized RGBA value to a sega palette index
 sub GetPaletteIndex {
     my ($r,$g,$b,$a) = @_;
     # 0x00-0x1F,0x20-0x3F...
-    my $color = chr(int(255*$b>>5)<<1).chr((int(255*$g>>5)<<5)|(int(255*$r>>5)<<1));
-    # check for transparent pixel if alpha channel in image
-    # check for magic pink (#FF00FF)
-    if ( ( $alpha && defined $a && $a == 1 ) ||
-	 ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
-	 ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
-	return 0;
+    my $color;
+    if ( $grey ) {
+	my $avg = int((85*($r+$g+$b))>>5);
+	$color = chr($avg<<1).chr(($avg<<5)|($avg<<1));
+    } else {
+	$color = chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
     }
-    if ( ! $paletteGet ) {
+    my $index = -1;
+    if ( exists $cacheGetPaletteIndex{$color} ) {
+	$index = $cacheGetPaletteIndex{$color};
+	if ( ! $paletteGet ) {
+	    return $index;
+	}
+    } elsif ( ( $alpha && defined $a && $a == 1 ) ||
+	      ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
+	      ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
+	# check for transparent pixel if alpha channel in image
+	# check for magic pink (#FF00FF)
+	$index = 0;
+    } elsif ( ! $paletteGet ) {
 	# start with 1 to avoid picking transparent index
 	# do check index 0 if no other matches found
 	for ( my $i = 1; $i <= 16; $i++ ) {
-	    my $pColor = substr($paletteData,($i%16)*2,2);
-	    if ( $color eq $pColor ) {
-		return $i;
+	    if ( $color eq substr($paletteData,($i%16)*2,2) ) {
+		$index = $i;
+		last;
 	    }
 	}
     }
-    my $c = sprintf("0x%4.4X",unpack("n",$color));
-    $missingColors{$c}++;
-    return 0;
+
+    if ( $index < 0 || $paletteGet ) {
+	$missingColors{$color}++;
+    }
+
+    if ( $index < 0 ) {
+	$index = 0;
+    }
+
+    $cacheGetPaletteIndex{$color} = $index;
+
+    return $index;
 }
 
 sub Help {
@@ -398,6 +462,7 @@ scdimg2tile [options] <imgfiles...>
   -magicblack         treat #000000 as transparent
   -nolabels           do not print any labels in out
   -bin                output binary instead of assembly
+  -grey               averages colors for using greyscale palette
   -v=<#>              specify verbosity
 
 ';
