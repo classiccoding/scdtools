@@ -352,7 +352,7 @@ if ( ! defined $pathTableLittleEndian ) {
 }
 
 &DeterminePathTableIndexes();
-my $pathTableByteSize = &GetPathTableByteSize();
+my $pathTableByteSize = &GetPathTableByteSize(0);
 if ( $pathTableLittleEndian ) {
     $location = $pathTableLittleEndian + &NumberOfSectorsForSize($pathTableByteSize);
 }
@@ -1108,7 +1108,7 @@ sub _PrintEndianPathTable_ {
 	if ( $dir eq '' ) {
 	    $id = chr(0x00);
 	} else {
-	    $id = $dirs{$dir}{'dirShort'};
+	    $id = $dirs{$dir}{'dirShort'}{$joliet};
 	}
 	if ( $little || $big ) {
 	    my $dirParent = $dirs{$dir}{'dirParent'};
@@ -1163,10 +1163,12 @@ sub DetermineFileInformationForIso {
 
 	my $dir = '';
 	my $dirShort = '';
+	my $dirShortCased = '';
 	my $dirParent = '';
 	my $dirLevel = 0;
 
-	$dirs{$dir}{'dirShort'} = $dirShort;
+	$dirs{$dir}{'dirShort'}{0} = $dirShort;
+	$dirs{$dir}{'dirShort'}{1} = $dirShortCased;
 	$dirs{$dir}{'dirParent'} = $dirParent;
 	$dirs{$dir}{'level'} = $dirLevel;
 	# will be determined later
@@ -1230,8 +1232,8 @@ sub AddDirInformationForIso {
 	# but if 'level' not defined, than define these now
 	if ( ! exists $dirs{$dir} ||
 	     ! exists $dirs{$dir}{'level'} ) {
-	    $dirs{$dir}{'dirShort'} = $dirShort;
-	    $dirs{$dir}{'dirShortCased'} = $dirShortCased;
+	    $dirs{$dir}{'dirShort'}{0} = $dirShort;
+	    $dirs{$dir}{'dirShort'}{1} = $dirShortCased;
 	    $dirs{$dir}{'dirParent'} = $dirParent;
 	    $dirs{$dir}{'level'} = $dirLevel;
 	    # will be determined later
@@ -1367,7 +1369,15 @@ sub GetExtentTablesSectorSize {
 	# files and subdirs
 	foreach my $file ( sort keys %{$dirs{$dir}{'contents'}} ) {
 	    my $bytes;
-	    $bytes = &GetExtentLength($files{$file}{'fileShort'}{$joliet},1,$joliet);
+	    if ( exists $dirs{$file} && exists $files{$file} ) {
+		die "Cannot have $file as both dir and file\n";
+	    } elsif ( exists $dirs{$file} ) {
+		$bytes = &GetExtentLength($dirs{$file}{'dirShort'}{$joliet},1,$joliet);
+	    } elsif ( exists $files{$file} ) {
+		$bytes = &GetExtentLength($files{$file}{'fileShort'}{$joliet},1,$joliet);
+	    } else {
+		die "File $file is not mapped\n";
+	    }
 
 	    # cannot have entry that crosses sector boundary
 	    my $remainBytesInSector = $sectorSize - ( $sizeBytes % $sectorSize );
@@ -1437,11 +1447,7 @@ sub PrintExtentTablesToIso {
 		die "Cannot have $file as both dir and file\n";
 	    } elsif ( exists $dirs{$file} ) {
 		if ( $dirs{$file}{'public'} >= 2 ) {
-		    if ( $joliet ) {
-			&PrintExtentToIso($dirs{$file}{'extentStart'}{$joliet},$dirs{$file}{'extentSize'}{$joliet},chr(0x02),$dirs{$dir}{'dirShortCased'},0,$joliet);
-		    } else {
-			&PrintExtentToIso($dirs{$file}{'extentStart'}{$joliet},$dirs{$file}{'extentSize'}{$joliet},chr(0x02),$dirs{$dir}{'dirShort'},0,$joliet);
-		    }
+		    &PrintExtentToIso($dirs{$file}{'extentStart'}{$joliet},$dirs{$file}{'extentSize'}{$joliet},chr(0x02),$dirs{$file}{'dirShort'}{$joliet},0,$joliet);
 		}
 	    } elsif ( exists $files{$file} ) {
 		if ( $files{$file}{'public'} >= 2 ) {
