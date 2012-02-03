@@ -26,6 +26,8 @@ use strict;
 use warnings;
 use Image::Magick;
 
+# Graphics::Magick doesn't appear to have easy way to get pixel alpha value
+
 if ( $#ARGV < 0 ) {
     &Help();
 }
