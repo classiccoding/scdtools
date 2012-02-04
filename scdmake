@@ -55,6 +55,8 @@ my $isoBufferLength = 0;
 
 # 0: none, 1: some, 2: most
 my $verbosity = 2;                   # not in config by default
+my $verbositySet = 0;                # not in condig by default
+# config should use &SetVerbosityIfNotAlreadySet(<value>);
 
 # a value different than 0x800 (2048) has never been tested or desired
 # change at your own risk
@@ -197,10 +199,27 @@ $pvdbibliographicalfileid = \'\';
 $ipprefix                 = \'IP\';
 $spprefix                 = \'SP\';
 $outprefix                = \'SCD\';
+
+&SetVerbosityIfNotAlreadySet(2);
+
 ';
 
 eval($defaults);
 warn $@ if $@;
+$verbositySet = 0;
+
+my $loop;
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-country=([uje]|all)$/i ) {
+	$scdcountry = $1;
+    } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
+	$verbosity = $1;
+	$verbositySet++;
+    } else {
+	print "Bad argument: $arg\n";
+	&Help();
+    }
+}
 
 my $cfg = 'SCDMAKE.CFG';
 my $inc = 'SCDMAKE.INC';
@@ -225,18 +244,6 @@ if ( -e $cfg ) {
 } else {
     print "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
     &Help();
-}
-
-my $loop;
-foreach my $arg (@ARGV) {
-    if ( $arg =~ m/^-country=([uje]|all)$/i ) {
-	$scdcountry = $1;
-    } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
-	$verbosity = $1;
-    } else {
-	print "Bad argument: $arg\n";
-	&Help();
-    }
 }
 
 if ( $joliet ) {
@@ -2023,6 +2030,13 @@ sub EnsureFileSizeIsWithinBounds {
     }
     if ( $fileSize < $lower || $fileSize > $upper ) {
 	print "File size is bad: $file: $lower <= $fileSize <= $upper\n";
+    }
+}
+
+sub SetVerbosityIfNotAlreadySet {
+    if ( ! $verbositySet ) {
+	$verbosity = $_[0];
+	$verbositySet = 1;
     }
 }
 
