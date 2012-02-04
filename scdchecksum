@@ -20,7 +20,7 @@
 use strict;
 use warnings;
 
-if ( $#ARGV < 1 ) {
+if ( $#ARGV < 0 ) {
     &Help();
 }
 
