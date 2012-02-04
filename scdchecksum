@@ -1,0 +1,30 @@
+#!/usr/bin/perl
+###############################################################################
+# would be nice to make a generic checksummer...
+###############################################################################
+# this puts 16 bit checksum of all the 16 bit words starting at byte 2 at
+# bytes 0-1
+###############################################################################
+
+use strict;
+use warnings;
+
+foreach my $file (@ARGV) {
+    open( BIN, "<$file" ) or die "Cannot read $file\n";
+    binmode BIN;
+    my $size = -s $file;
+    my $buffer = '';
+    if ( ! read(BIN,$buffer,$size) ) {
+	die "Cannot read $file\n";
+    }
+    close BIN;
+    my $sum = 0x0000;
+    for ( my $i = 2; $i < $size; $i += 2 ) {
+	$sum += unpack("n",substr($buffer,$i,2));
+    }
+    substr($buffer,0,2) = pack("n",$sum);
+    open( BIN, ">$file" ) or die "Cannot write $file\n";
+    binmode BIN;
+    print BIN $buffer;
+    close BIN;
+}
