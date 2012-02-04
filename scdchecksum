@@ -9,6 +9,10 @@
 use strict;
 use warnings;
 
+if ( $#ARGV < 1 ) {
+    &Help();
+}
+
 foreach my $file (@ARGV) {
     open( BIN, "<$file" ) or die "Cannot read $file\n";
     binmode BIN;
@@ -19,7 +23,7 @@ foreach my $file (@ARGV) {
     }
     close BIN;
     my $sum = 0x0000;
-    for ( my $i = 2; $i < $size; $i += 2 ) {
+    for ( my $i = 2; $i < $size-1; $i += 2 ) {
 	$sum += unpack("n",substr($buffer,$i,2));
     }
     substr($buffer,0,2) = pack("n",$sum);
@@ -27,4 +31,16 @@ foreach my $file (@ARGV) {
     binmode BIN;
     print BIN $buffer;
     close BIN;
+}
+
+sub Help {
+    die '
+scdchecksum <files>
+
+[description]
+  Computes a 16 bit checksum on all the 16 bit pairs in the file except the
+  first 16 bit pair.  It replaces the first 16 bit pair with the computed
+  checksum.  Was originally written for error handling on Sega CD file reading.
+
+';
 }
