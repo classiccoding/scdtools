@@ -221,6 +221,7 @@ if ( -e $cfg ) {
 	print CFG $defaults;
     }
     close CFG;
+    exit;
 } else {
     print "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
     &Help();
