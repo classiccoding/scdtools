@@ -36,6 +36,10 @@ if ( $replaceFileSize <= 0 ) {
     exit;
 }
 
+# TODO only replace part of the file as needed when I wanted to replace
+# the SCD fun part of the ISO
+# $replaceFileSize = 0x8000;
+
 open( REPLACE, "<$replaceFileName" ) or die "Cannot read $replaceFileName\n";
 
 my $replaceFileData = '';
