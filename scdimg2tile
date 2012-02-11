@@ -21,9 +21,16 @@
 
 use strict;
 use warnings;
+
 use Image::Magick;
 
+use FindBin;
+use lib $FindBin::Bin;
+use SCDTools::Palette;
+
 # Graphics::Magick doesn't appear to have easy way to get pixel alpha value
+
+my $palette = SCDTools::Palette->new();
 
 if ( $#ARGV < 0 ) {
     &Help();
@@ -59,8 +66,6 @@ my $tileMapWidth = 1;
 my $comments = 1;
 my $labels = 1;
 my $label = '';
-my $magicPink = 0;
-my $magicBlack = 0;
 my $grey = 0;
 my $dither4x2 = 0;
 my $dither2x2 = 0;
@@ -78,14 +83,9 @@ my @orderDitherMatrix2x2 = ( 0, 3, 2, 1 );
 my @orderDitherMatrix4x2 = ( 0, 6, 1, 7, 4, 2, 5, 3 );
 
 my @imgFiles;
-my @colors;
 my @tiles;
 my @tileMapRows;
 
-my $paletteData;
-# TODO functionality removed for now, may want to implement in new design
-# my %missingColors;
-my $missingColors = 0;
 my $missingTiles = 0;
 
 my $tmpFile = 'TMP.BIN';
@@ -95,18 +95,14 @@ my $img;
 my $imgAlpha = 0;
 
 foreach my $arg (@ARGV) {
-    if ( $arg =~ /^-asmpal(ette)?=(.*)$/i ) {
-	$outputPalette = $2;
-	$outputPaletteBin = 0;
+    if ( $palette->ParseArg($arg) ) {
+	# do nothing
     } elsif ( $arg =~ /^-asmtiles=(.*)$/i ) {
 	$outputTiles = $1;
 	$outputTilesBin = 0;
     } elsif ( $arg =~ /^-asmmap=(.*)$/i ) {
 	$outputTileMap = $1;
 	$outputTileMapBin = 0;
-    } elsif ( $arg =~ /^-binpal(ette)?=(.*)$/i ) {
-	$outputPalette = $2;
-	$outputPaletteBin = 1;
     } elsif ( $arg =~ /^-bintiles=(.*)$/i ) {
 	$outputTiles = $1;
 	$outputTilesBin = 1;
@@ -116,14 +112,6 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-asm=([mpt]+),(.*)$/i ) {
 	$outputAllOrder = $1;
 	$outputAllFile = $2;
-    } elsif ( $arg =~ /^-pal(ette)?file=(.+)$/i ) {
-	$paletteFile = $2;
-    } elsif ( $arg =~ /^-pal(ette)?byteoffset=(\d+)/i ) {
-	$paletteOffset = $2;
-    } elsif ( $arg =~ /^-pal(ette)?offset=(\d+)$/i ) {
-	$paletteOffset = 32 * $2;
-    } elsif ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
-	$paletteCount = $2;
     } elsif ( $arg =~ /^-tilesfile=(.+)$/i ) {
 	$tilesFile = $1;
     } elsif ( $arg =~ /^-tilesbyteoffset=(\d+)/i ) {
@@ -149,16 +137,6 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-planewithmap$/i ) {
 	$tilesOrderPlane = 1;
 	$tilesReuse = 1;
-    } elsif ( $arg =~ /^-nocomments$/i ) {
-	$comments = 0;
-    } elsif ( $arg =~ /^-nolabels$/i ) {
-	$labels = 0;
-    } elsif ( $arg =~ /^-label=(.+)$/i ) {
-	$label = $1;
-    } elsif ( $arg =~ /^-magicpink$/i ) {
-	$magicPink = 1;
-    } elsif ( $arg =~ /^-magicblack$/i ) {
-	$magicBlack = 1;
     } elsif ( $arg =~ /^-gr[ae]y$/i ) {
 	$grey = 1;
     } elsif ( $arg =~ /^-dither=4x2$/i ) {
@@ -169,6 +147,12 @@ foreach my $arg (@ARGV) {
 	$ditherFS = 1;
     } elsif ( $arg =~ /^-dither=r$/i ) {
 	$ditherR = 1;
+    } elsif ( $arg =~ /^-nocomments$/i ) {
+	$comments = 0;
+    } elsif ( $arg =~ /^-nolabels$/i ) {
+	$labels = 0;
+    } elsif ( $arg =~ /^-label=(.+)$/i ) {
+	$label = $1;
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
 	$verbosity = $1;
     } elsif ( -e $arg ) {
@@ -200,70 +184,24 @@ if ( $label eq '' && $#imgFiles == 0 ) {
     $label =~ s/[^A-Za-z0-9]//g;
 }
 
-&ReadPalette();
+$palette->ReadPalette();
 &ReadTiles();
 
 foreach my $imgFile (@imgFiles) {
     &Img2Tile($imgFile);
 }
 
-if ( $missingColors ) {
-    print STDERR "Colors detected exceeded colors allowed in palette\n";
-}
+# TODO print missing colors?
 
 if ( $outputAllOrder ne '' ) {
     &OutputAll();
 } else {
-    &OutputPalette();
+    $palette->OutputPalette();
     &OutputTiles();
     &OutputTileMap();
 }
 
 ###############################################################################
-
-sub ReadPalette {
-    if ( $paletteFile eq '' ) {
-	return;
-    }
-    if ( ! -e $paletteFile ) {
-	die "Bad palette file: $paletteFile";
-    }
-    my $tmpFileRemove = 0;
-    if ( $paletteFile =~ m/\.(asm|68k)$/i ) {
-	my $paletteAsmFile = $paletteFile;
-	$paletteFile = $tmpFile;
-	$tmpFileRemove = $tmpFileRemoveAfterUse;
-	system("scdasm -v=$verbosity $paletteAsmFile $paletteFile");
-	if ( ! -e $paletteFile ) {
-	    die "Bad scdasm since didn't make: $paletteFile";
-	}
-    }
-
-    if ( $paletteCount <= 0 ) {
-	$paletteCount = ( ( -s $paletteFile ) - $paletteOffset ) >> 5;
-    }
-
-    my $paletteCountInBytes = $paletteCount*32;
-    my $paletteData = chr(0x00)x$paletteCountInBytes;
-
-    open( PALETTE, $paletteFile ) or die "Cannot read palette file: $!\n";
-    binmode PALETTE;
-    seek(PALETTE,$paletteOffset,0);
-    my $paletteDataBuffer;
-    if ( read(PALETTE,$paletteDataBuffer,$paletteCountInBytes) == $paletteCountInBytes ) {
-	$paletteData = $paletteDataBuffer;
-	for ( my $paletteDataByte = 0; $paletteDataByte < $paletteCountInBytes;$paletteDataByte += 2 ) {
-	    if ( $paletteDataByte % 32 > 0 ) {
-		push @colors, substr($paletteData,$paletteDataByte,2);
-	    }
-	}
-    }
-    close PALETTE;
-
-    if ( $tmpFileRemove ) {
-	unlink $tmpFile;
-    }
-}
 
 sub ReadTiles {
     if ( $tilesFile eq '' ) {
@@ -326,23 +264,8 @@ sub Img2Tile($) {
 
     # TODO an attempt to look at dithering
     if ( $ditherFS || $ditherR ) {
-	my $colorsLength = $#colors+1;
-
 	my $imgPalette = Image::Magick->new();
-	$imgPalette->Set(size=>"${colorsLength}x1");
-	$x = $imgPalette->ReadImage('xc:black');
-	warn $x if $x;
-
-	for ( my $colorsIndex = 0; $colorsIndex < $colorsLength; $colorsIndex++ ) {
-	    my $c = $colors[$colorsIndex];
-	    my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
-			   ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
-			   (   ord(substr($c,1,1))        & 0xE ) / 14 );
-	    for ( my $i = 0; $i < 3; $i++ ) {
-		$pixels[$i] = $pixels[$i]*0.95 + 0.025;
-	    }
-	    $imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
-	}
+	$palette->UpdateImageMagickPalette($imgPalette);
     
 	if ( $ditherFS ) {
 	    $img->Remap('image'=>$imgPalette,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
@@ -432,7 +355,6 @@ sub GetPaletteIndex {
 	}
     }
     my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
-    #my ($r,$g,$b,$a) = @_;
     # 0x00-0x1F,0x20-0x3F...
     my $orderedDitherAdd = 0;
     if ( $dither4x2 ) {
@@ -458,31 +380,8 @@ sub GetPaletteIndex {
 	#if ( ! $paletteGet ) {
 	    return $index;
 	#}
-    } elsif ( ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
-	      ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
-	# check for transparent pixel if alpha channel in image
-	# check for magic pink (#FF00FF)
-	$index = 0;
     } else {
-	# start with 1 to avoid picking transparent index
-	# do check index 0 if no other matches found
-	for ( my $colorsIndex = 0; $colorsIndex <= $#colors; $colorsIndex++ ) {
-	    if ( $color eq $colors[$colorsIndex] ) {
-		# account for each palette having unused transparent index
-		$index = $colorsIndex + int($colorsIndex / 15) + 1;
-		last;
-	    }
-	}
-    }
-
-    if ( $index < 0 && $#colors+1 < $paletteCount*15 ) {
-	push @colors, $color;
-	$index = $#colors + int($#colors / 15) + 1;
-    }
-
-    if ( $index < 0 ) {
-	$missingColors++;
-	$index = 0;
+	$index = $palette->GetColorIndex($color);
     }
 
     $cacheGetPaletteIndex{$color} = $index;
@@ -500,7 +399,7 @@ sub OutputAll {
 	my $outputType = substr($outputAllOrder,$i,1);
 	# pass zero to indicate assembly output data
 	if ( $outputType eq 'p' ) {
-	    $fileContents .= &GetOutputPaletteData(0);
+	    $fileContents .= $palette->GetOutputPaletteData(0);
 	} elsif ( $outputType eq 't' ) {
 	    $fileContents .= &GetOutputTilesData(0);
 	} elsif ( $outputType eq 'm' ) {
@@ -512,63 +411,6 @@ sub OutputAll {
     open(ALL,'>'.$outputAllFile);
     print ALL $fileContents;
     close ALL;
-}
-
-sub OutputPalette {
-    if ( $outputPalette eq '' ) {
-	return;
-    }
-    my $fileContents = &GetOutputPaletteData($outputPaletteBin);
-    open(PALETTE,'>'.$outputPalette);
-    if ( $outputPaletteBin ) {
-	binmode PALETTE;
-    }
-    print PALETTE $fileContents;
-    close PALETTE;
-}
-
-sub GetOutputPaletteData {
-    my ($bin) = @_;
-    if ( $#colors < 0 ) {
-	return '';
-    }
-    my $fileContents = '';
-    if ( ! $bin ) {
-	if ( $comments ) {
-	    $fileContents .= ";; palette\n";
-	}
-	if ( $labels ) {
-	    $fileContents .= "Start${label}Palette:\n";
-	}
-    }
-    for ( my $paletteIndex = 0; $paletteIndex < $paletteCount; $paletteIndex++ ) {
- 	if ( $bin ) {
- 	    $fileContents .= pack("n",0x0000);
- 	} else {   
-	    $fileContents .= " dc.w 0x0000\n";
-	}
-	for ( my $i = 0; $i < 15; $i++ ) {
-	    my $colorsIndex = $paletteIndex * 15 + $i;
-	    if ( $colorsIndex <= $#colors ) {
-		if ( $bin ) {
-		    $fileContents .= $colors[$colorsIndex];
-		} else {
-		    my $colorf = sprintf("0x%4.4X",unpack("n",$colors[$colorsIndex]));
-		    $fileContents .= ' dc.w '.$colorf."\n";
-		}
-	    } else {
-		if ( $bin ) {
-		    $fileContents .= pack("n",0x0000);
-		} else {
-		    $fileContents .= " dc.w 0x0000\n";
-		}
-	    }
-	}
-    }
-    if ( ! $bin && $labels ) {
-	$fileContents .= "End${label}Palette:\n";
-    }
-    return $fileContents;
 }
 
 sub OutputTiles {
@@ -730,54 +572,6 @@ sub GetOutputTileMapData {
     return $fileContents;
 }
 
-###############################################################################
-# OLD CODE that might be useful to reinstate
-###############################################################################
-
-# my @colors = sort {$missingColors{$b} <=> $missingColors{$a}} keys %missingColors;
-
-# if ( $paletteGet ) {
-#     my $index = 0;
-#     if ( $#colors + 1 > $paletteCount * 16 - 1 ) {
-# 	print STDERR "Too many colors for one palette (will use most frequent colors)\n";
-#     }
-#     for ( my $paletteIndex = 0; $paletteIndex < $paletteCount; $paletteIndex++ ) {
-# 	if ( $bin ) {
-# 	    print pack("n",0x0000);
-# 	} else {   
-# 	    if ( $comments ) {
-# 		print ";; palette\n";
-# 	    }
-# 	    print " dc.w 0x0000\n";
-# 	}
-# 	for ( my $i = 0; $i < 15; $i++ ) {
-# 	    my $colorsIndex = $paletteIndex * 15 + $i;
-# 	    if ( $colorsIndex <= $#colors ) {
-# 		if ( $bin ) {
-# 		    print $colors[$colorsIndex];
-# 		} else {
-# 		    my $colorf = sprintf("0x%4.4X",unpack("n",$colors[$colorsIndex]));
-# 		    print ' dc.w '.$colorf."\n";
-# 		}
-# 	    } else {
-# 		if ( $bin ) {
-# 		    print pack("n",0x0000);
-# 		} else {
-# 		    print " dc.w 0x0000\n";
-# 		}
-# 	    }
-# 	}
-#     }
-# } else {
-#     foreach my $color (@colors) {
-# 	my $count = $missingColors{$color};
-# 	my $colorf = sprintf("0x%4.4X",unpack("n",$color));
-# 	print STDERR "Palette does not contain color: $colorf ($count)\n";
-#     }
-# }
-
-###############################################################################
-
 sub Help {
 # INTENTIONALLY UNDOCUMENTED:
 # -palcount=<#>         specifies the number of palettes in use
@@ -787,11 +581,9 @@ scdimg2tile [options] <imgfiles...>
 [description]
   converts images to the Sega VDP format files
 
-[options]
-  -asmpal=<file>        output palette to assembly file
+'.$palette->GetHelpString().'[options]
   -asmtiles=<file>      output tiles to assembly file
   -asmmap=<file>        output tile map to assembly file
-  -binpal=<file>        output palette to binary file
   -bintiles=<file>      output tiles to binary file
   -binmap=<file>        output tile map to binary file
   -asm=<order>,<file>   output palette, tiles, and/or tile map to assembly file
@@ -799,9 +591,6 @@ scdimg2tile [options] <imgfiles...>
                         <order>=t: tiles position in assembly output
                         <order>=m: tile map position in assembly output
                         example: -asm=mt,IMG.ASM outputs tile map then tiles
-  -palfile=<file>       specifies the palette
-  -paloffset=<#>        palette offset of the first palette in the palette file
-  -palbyteoffset=<#>    byte offset of the first palette in the palette file
   -tilesfile=<file>     specifies the tiles
   -tilesoffset=<#>      tile offset of the first tile in the tiles file
   -tilesbyteoffset=<#>  byte offset of the first tile in the tiles file
@@ -821,8 +610,6 @@ scdimg2tile [options] <imgfiles...>
   -nolabels             do not print any labels in out
   -label=<name>         labels use <name> to make useful labels
                         example: Start<name>Tiles:
-  -magicpink            treat #FF00FF as transparent
-  -magicblack           treat #000000 as transparent
   -grey                 averages colors for using greyscale palette
   -dither=4x2           ordered dither using 4x2 matrix (only -grey for now)
   -dither=2x2           ordered dither using 2x2 matrix (only -grey for now)
