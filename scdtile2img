@@ -211,6 +211,8 @@ sub Tile2Img {
 	my $g = &Convert3BitColorTo8BitColor($pValue1 >> 5);
 	my $b = &Convert3BitColorTo8BitColor($pValue0 >> 1);
 	$chunk .= chr($r).chr($g).chr($b);
+	# my $color = substr($paletteData,$pIndex*2,2);
+	# $chunk .= &SCDTools::Palette::ConvertVDPColorToRGB24Bit($color);
     }
     $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
 
@@ -378,19 +380,11 @@ sub ReadTile {
     return $tileData;
 }
 
-sub Convert3BitColorTo251ValueColor {
-    my ($bit3) = @_;
-    return int( ( $bit3 & 0x07 ) * 251 / 0x07 + 0.5 );
-}
-
 sub Convert3BitColorTo8BitColor {
     my ($bit3) = @_;
-    return int( ( $bit3 & 0x07 ) * 0xF0 / 0x07 + 0.5 );
-}
-
-sub Convert8BitColorTo3BitColor {
-    my ($bit8) = @_;
-    return int( ( $bit8 & 0xFF ) * 0x07 / 0xFF + 0.5 );
+    # old: return int( ( $bit3 & 0x07 ) * 0xF0 / 0x07 + 0.5 );
+    # make consistent with SCDTools::Palette conversions
+    return int( ( ( ( $bit3 & 0x07 ) << 1 ) / 15.0 ) * 255 );
 }
 
 

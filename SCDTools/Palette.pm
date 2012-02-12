@@ -1,5 +1,5 @@
 ###############################################################################
-# Copyright (c) 2011 by bgvanbur
+# Copyright (c) 2012 by bgvanbur
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -32,6 +32,7 @@ sub GetHelpString {
   -palfile=<file>       specifies the palette
   -paloffset=<#>        palette offset of the first palette in the palette file
   -palbyteoffset=<#>    byte offset of the first palette in the palette file
+  -palcount=<#>         specifies the number of palettes in use
   -magicpink            treat #FF00FF as transparent
   -magicblack           treat #000000 as transparent
 ';
@@ -60,26 +61,6 @@ sub new {
    return $self;
 }
 
-sub SetVerbosity {
-    my ($self,$verbosity) = @_;
-    $self->{'verbosity'} = $verbosity;
-}
-
-sub SetComments {
-    my ($self,$comments) = @_;
-    $self->{'comments'} = $comments;
-}
-
-sub SetLabels {
-    my ($self,$labels) = @_;
-    $self->{'labels'} = $labels;
-}
-
-sub SetLabel {
-    my ($self,$label) = @_;
-    $self->{'label'} = $label;
-}
-
 sub ParseArg {
     my ($self,$arg) = @_;
     if ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
@@ -96,6 +77,8 @@ sub ParseArg {
  	$self->{'paletteFileInputOffset'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?offset=(\d+)$/i ) {
  	$self->{'paletteFileInputOffset'} = 32 * $2;
+    } elsif ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
+ 	$self->{'paletteCount'} = $2;
     } elsif ( $arg =~ /^-magicpink$/i ) {
 	$self->{'magicPink'} = 1;
     } elsif ( $arg =~ /^-magicblack$/i ) {
@@ -266,14 +249,14 @@ sub UpdateImageMagickPalette {
     my ($self,$imgPalette) = @_;
     use Image::Magick;
 
-    my $colorsLength = $self->{'colorsLength'};
+    my $colorsCount = $self->{'colorsCount'};
 
     #my $imgPalette = Image::Magick->new();
-    $imgPalette->Set(size=>"${colorsLength}x1");
+    $imgPalette->Set(size=>"${colorsCount}x1");
     my $x = $imgPalette->ReadImage('xc:black');
     warn $x if $x;
 
-    for ( my $colorsIndex = 0; $colorsIndex < $colorsLength; $colorsIndex++ ) {
+    for ( my $colorsIndex = 0; $colorsIndex < $colorsCount; $colorsIndex++ ) {
 	my $c = $self->{'colors'}[$colorsIndex];
 	my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
 		       ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
@@ -285,17 +268,69 @@ sub UpdateImageMagickPalette {
     }
 }
 
+sub Convert {
+    my ($self,$type) = @_;
+    my $colorsCount = $self->{'colorsCount'};
+    for ( my $colorsIndex = 0; $colorsIndex < $colorsCount; $colorsIndex++ ) {
+	my $cOld = $self->{'colors'}[$colorsIndex];
+	my $cNew;
+	if ( $type eq 'greyavg' ) {
+	    my ($r,$g,$b) = &ConvertVDPColorToRGBNormalized($cOld);
+	    my $avg = ($r+$g+$b)/3.0;
+	    $cNew = &ConvertRGBNormalizedToVDPColor($avg,$avg,$avg);
+	} elsif ( $type eq 'desaturate50' ) {
+	    my ($r,$g,$b) = &ConvertVDPColorToRGBNormalized($cOld);
+	    my $avg = ($r+$g+$b)/3.0;
+	    $cNew = &ConvertRGBNormalizedToVDPColor(0.5*($r+$avg),0.5*($g+$avg),0.5*($b+$avg));
+	} elsif ( $type eq 'invert' ) {
+	    my ($r,$g,$b) = &ConvertVDPColorToRGBNormalized($cOld);
+	    my $avg = ($r+$g+$b)/3.0;
+	    $cNew = &ConvertRGBNormalizedToVDPColor(1.0-$r,1.0-$g,1.0-$b);
+	} elsif ( $type eq 'redonly' ) {
+	    my ($r,$g,$b) = &ConvertVDPColorToRGBNormalized($cOld);
+	    my $avg = ($r+$g+$b)/3.0;
+	    $cNew = &ConvertRGBNormalizedToVDPColor($r,0,0);
+	} elsif ( $type eq 'greenonly' ) {
+	    my ($r,$g,$b) = &ConvertVDPColorToRGBNormalized($cOld);
+	    my $avg = ($r+$g+$b)/3.0;
+	    $cNew = &ConvertRGBNormalizedToVDPColor(0,$g,0);
+	} elsif ( $type eq 'blueonly' ) {
+	    my ($r,$g,$b) = &ConvertVDPColorToRGBNormalized($cOld);
+	    my $avg = ($r+$g+$b)/3.0;
+	    $cNew = &ConvertRGBNormalizedToVDPColor(0,0,$b);
+	} else {
+	    $cNew = $cOld;
+	}
+	$self->{'colors'}[$colorsIndex] = $cNew;
+    }
+}
+
+sub ConvertRGBNormalizedToVDPColor {
+    my ($r,$g,$b) = @_;
+    return chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
+}
+
+sub ConvertVDPColorToRGBNormalized {
+    my ($c) = @_;
+    return ((ord(substr($c,1,1))&0xE)/15.0,((ord(substr($c,1,1))>>4)&0xE)/15.0,(ord(substr($c,0,1))&0xE)/15.0);
+}
+
+sub ConvertVDPColorToRGB24Bit {
+    my ($c) = @_;
+    return chr(((ord(substr($c,1,1))&0xE)/15.0)*255).chr((((ord(substr($c,1,1))>>4)&0xE)/15.0)*255).chr(((ord(substr($c,0,1))&0xE)/15.0)*255);
+}
+
 1;
 
 
 
-# if ( $missingColors ) {
-#     print STDERR "Colors detected exceeded colors allowed in palette\n";
-# }
-
 ###############################################################################
 # OLD CODE that might be useful to reinstate
 ###############################################################################
+
+# if ( $missingColors ) {
+#     print STDERR "Colors detected exceeded colors allowed in palette\n";
+# }
 
 # my @colors = sort {$missingColors{$b} <=> $missingColors{$a}} keys %missingColors;
 

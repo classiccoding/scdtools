@@ -371,7 +371,7 @@ sub GetPaletteIndex {
 	$color = chr($avg<<1).chr(($avg<<5)|($avg<<1));
     } else {
 	# TODO add in orderedDitherAdd
-	$color = chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
+	$color = &SCDTools::Palette::ConvertRGBNormalizedToVDPColor($r,$g,$b);
     }
     my $index = -1;
     if ( exists $cacheGetPaletteIndex{$color} ) {
@@ -573,8 +573,6 @@ sub GetOutputTileMapData {
 }
 
 sub Help {
-# INTENTIONALLY UNDOCUMENTED:
-# -palcount=<#>         specifies the number of palettes in use
     die '
 scdimg2tile [options] <imgfiles...>
 

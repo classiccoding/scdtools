@@ -1,0 +1,80 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2012 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# convert images to asm files for megadrive/megacd development
+###############################################################################
+
+use strict;
+use warnings;
+
+use FindBin;
+use lib $FindBin::Bin;
+use SCDTools::Palette;
+
+my $palette = SCDTools::Palette->new();
+my $verbosity = 2;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $convertType = 'none';
+
+foreach my $arg (@ARGV) {
+    if ( $palette->ParseArg($arg) ) {
+	# do nothing
+    } elsif ( $arg =~ /^-v=(\d+)$/i ) {
+    	$verbosity = $1;
+    } elsif ( $arg =~ /^-convert=(\S+)$/i ) {
+	$convertType = $1;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+$palette->ReadPalette();
+$palette->Convert($convertType);
+$palette->OutputPalette();
+
+###############################################################################
+
+sub Help {
+    die '
+scdpalettemutate [options]
+
+[description]
+  convert a palette from assembly/binary with optional color conversion and
+  output assembly/binary palette
+
+'.$palette->GetHelpString().'[options]
+  -convert=<type>       convert palette
+                        greyavg: convert to greyscale
+                        desaturate50: desaturate by 50%
+                        invert: invert colors
+                        redonly: zero out green and blue aspects
+                        greenonly: zero out red and blue aspects
+                        blueonly: zero out red and green aspects
+  -nocomments           do not print any comments in out
+  -nolabels             do not print any labels in out
+  -label=<name>         labels use <name> to make useful labels
+                        example: Start<name>Tiles:
+  -v=<#>                specify verbosity
+
+';
+}
