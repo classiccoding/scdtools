@@ -47,8 +47,8 @@ sub new {
    $self->{'colorsCount'} = 0;
    $self->{'colorsMissing'} = {};
    $self->{'paletteCount'} = 1;
-   $self->{'paletteFileOutput'} = '';
-   $self->{'paletteFileOutputBin'} = 0;
+   $self->{'paletteFileOutputAsm'} = '';
+   $self->{'paletteFileOutputBin'} = '';
    $self->{'paletteFileInput'} = '';
    $self->{'paletteFileInputOffset'} = 0;
    $self->{'magicPink'} = 0;
@@ -66,11 +66,9 @@ sub ParseArg {
     if ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
  	$self->{'paletteCount'} = $2;
     } elsif ( $arg =~ /^-asmpal(ette)?=(.*)$/i ) {
- 	$self->{'paletteFileOutput'} = $2;
- 	$self->{'paletteFileOutputBin'} = 0;
+ 	$self->{'paletteFileOutputAsm'} = $2;
     } elsif ( $arg =~ /^-binpal(ette)?=(.*)$/i ) {
- 	$self->{'paletteFileOutput'} = $2;
- 	$self->{'paletteFileOutputBin'} = 1;
+ 	$self->{'paletteFileOutputBin'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?file=(.+)$/i ) {
  	$self->{'paletteFileInput'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?byteoffset=(\d+)/i ) {
@@ -146,12 +144,18 @@ sub ReadPalette {
 
 sub OutputPalette {
     my ($self) = @_;
-    if ( $self->{'paletteFileOutput'} eq '' ) {
+    $self->OutputPaletteForFileAndBinMode($self->{'paletteFileOutputAsm'},0);
+    $self->OutputPaletteForFileAndBinMode($self->{'paletteFileOutputBin'},1);
+}
+
+sub OutputPaletteForFileAndBinMode {
+    my ($self,$file,$bin) = @_;
+    if ( $file eq '' ) {
 	return;
     }
-    my $fileContents = $self->GetOutputPaletteData($self->{'paletteFileOutputBin'});
-    open(PALETTE,'>'.$self->{'paletteFileOutput'});
-    if ( $self->{'paletteFileOutputBin'} ) {
+    my $fileContents = $self->GetOutputPaletteData($bin);
+    open(PALETTE,'>'.$file);
+    if ( $bin ) {
 	binmode PALETTE;
     }
     print PALETTE $fileContents;
@@ -240,7 +244,7 @@ sub AddColor {
 	$index = $self->{'colorsCount'} + int($self->{'colorsCount'} / 15);
     } else {
 	$self->{'colorsMissing'}{$color}++;
-	$index = 0;
+	$index = -1;
     }
     return $index;
 }
@@ -318,6 +322,16 @@ sub ConvertVDPColorToRGBNormalized {
 sub ConvertVDPColorToRGB24Bit {
     my ($c) = @_;
     return chr(((ord(substr($c,1,1))&0xE)/15.0)*255).chr((((ord(substr($c,1,1))>>4)&0xE)/15.0)*255).chr(((ord(substr($c,0,1))&0xE)/15.0)*255);
+}
+
+sub PrintMissingColors {
+    my ($self) = @_;
+    my @colors = sort {$self->{'colorsMissing'}{$b} <=> $self->{'colorsMissing'}{$a}} keys %{$self->{'colorsMissing'}};
+    foreach my $color (@colors) {
+	my $count = $self->{'colorsMissing'}{$color};
+	my $colorf = sprintf("0x%4.4X",unpack("n",$color));
+	print STDERR "Palette does not contain color: $colorf ($count)\n";
+    }
 }
 
 1;

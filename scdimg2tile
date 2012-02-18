@@ -36,8 +36,6 @@ if ( $#ARGV < 0 ) {
     &Help();
 }
 
-my $outputPalette = '';
-my $outputPaletteBin = 0;
 my $outputTiles = '';
 my $outputTilesBin = 0;
 my $outputTileMap = '';
@@ -200,6 +198,8 @@ if ( $outputAllOrder ne '' ) {
     &OutputTiles();
     &OutputTileMap();
 }
+
+$palette->PrintMissingColors();
 
 ###############################################################################
 
@@ -373,18 +373,20 @@ sub GetPaletteIndex {
 	# TODO add in orderedDitherAdd
 	$color = &SCDTools::Palette::ConvertRGBNormalizedToVDPColor($r,$g,$b);
     }
+
     my $index = -1;
     if ( exists $cacheGetPaletteIndex{$color} ) {
 	$index = $cacheGetPaletteIndex{$color};
-	# TODO -paletteusage
-	#if ( ! $paletteGet ) {
-	    return $index;
-	#}
-    } else {
+    }
+    if ( $index < 0 ) {
 	$index = $palette->GetColorIndex($color);
     }
 
     $cacheGetPaletteIndex{$color} = $index;
+
+    if ( $index < 0 ) {
+	$index = 0;
+    }
 
     return $index;
 }
