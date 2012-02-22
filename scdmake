@@ -435,8 +435,8 @@ if ( $#scdmakeinc >= 0 ) {
 		    print STDERR "Using scdmakeincType == 1 and went over 128K for SCDMAKE.INC files, switch to scdmakeincType == 2 and adjust usage for the longword instead of word usage\n";
 		}
 	    }
-	    my $fileStartSectorsNice = sprintf("0x%${type}.${type}X",$fileStartSectors);
-	    my $fileSizeSectorsNice = sprintf("0x%${type}.${type}X",$fileSizeSectors);
+	    my $fileStartSectorsNice = sprintf("\$%${type}.${type}X",$fileStartSectors);
+	    my $fileSizeSectorsNice = sprintf("\$%${type}.${type}X",$fileSizeSectors);
 	    if ( $scdmakeincType == 1 ) {
 		print SCDMAKEINC " ;; ${fileLabel} sector start and sector size\n";
 		print SCDMAKEINC " dc.w ${fileStartSectorsNice}, ${fileSizeSectorsNice}\n";
@@ -444,8 +444,8 @@ if ( $#scdmakeinc >= 0 ) {
 		print SCDMAKEINC " ;; ${fileLabel} sector start and sector size\n";
 		print SCDMAKEINC " dc.l ${fileStartSectorsNice}, ${fileSizeSectorsNice}\n";
 	    } else {
-		my $fileStartBytesNice = sprintf("0x%${type}.${type}X",$fileStartBytes);
-		my $fileSizeBytesNice = sprintf("0x%${type}.${type}X",$fileSizeBytes);
+		my $fileStartBytesNice = sprintf("\$%${type}.${type}X",$fileStartBytes);
+		my $fileSizeBytesNice = sprintf("\$%${type}.${type}X",$fileSizeBytes);
 		print SCDMAKEINC "FILE_${fileLabel}_START_BYTE: equ ${fileStartBytesNice}\n";
 		print SCDMAKEINC "FILE_${fileLabel}_SIZE_BYTES: equ ${fileSizeBytesNice}\n";
 		print SCDMAKEINC "FILE_${fileLabel}_START_SECTOR: equ ${fileStartSectorsNice}\n";

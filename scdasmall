@@ -33,6 +33,10 @@ my $asmx = 'asmx-2.0b5';
 my $asmxbgv = 'asmx-bgv';
 my $asm68k = &Which('asm68k.exe');
 my $snasm68k = &Which('SNASM68K.EXE');
+my $asl = &Which('asl');
+
+# used for asl post processing
+my $s2p2bin = &Which('s2p2bin');
 
 my $asm68kopts = '/o op+ /o os+ /o ow+ /o oz+ /o oaq+ /o osq+ /o omq+';
 my $snasm68kopts = '-o op+ -o os+ -o ow+ -o oz+ -o oaq+ -o osq+ -o omq+';
@@ -89,10 +93,23 @@ if ( $snasm68k ne '' ) {
     $rc2 = system("diff asmxbgv.bin SNASM68K.BIN");
 }
 
+my $rc3 = 0;
+if ( $asl ne '' ) {
+    system("cp $asm TMP.ASM");
+    # TODO could add macro file redefine these even for included files
+    # convert incbin to binclude
+    system("perl -pi -e 's/incbin/binclude/' TMP.ASM");
+    # convert even to align 2
+    system("perl -pi -e 's/even/align 2/' TMP.ASM");
+    system("asl -cpu 68000 -xx -c -A TMP.ASM -o TMP.P -shareout TMP.H");
+    system("s2p2bin TMP.P asl.bin TMP.H");
+    $rc3 = system("diff asmxbgv.bin asl.bin");
+}
+
 print "\n";
 
 # see if clean diffs, if so clean up files and report it was clean
-if ( ! $rc0 && ! $rc1 && ! $rc2 ) {
+if ( ! $rc0 && ! $rc1 && ! $rc2 && ! $rc3 ) {
     system("rm asmx.bin");
     if ( $asmxbgv ne '' ) {
 	system("rm asmxbgv.bin");
@@ -104,6 +121,12 @@ if ( ! $rc0 && ! $rc1 && ! $rc2 ) {
 	system("rm $snasm68kShort");
 	system("rm SNASM68K.BAT");
 	system("rm SNASM68K.BIN");
+    }
+    if ( $asl ne '' ) {
+	system("rm TMP.ASM");
+	system("rm TMP.P");
+	system("rm TMP.H");
+	system("rm asl.bin");
     }
     print "All clean\n";
 }

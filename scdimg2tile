@@ -550,7 +550,21 @@ sub GetOutputTileMapData {
 	    if ( $bin ) {
 		$fileContents .= substr($tileMapRow,$i,$tileMapWidth);
 	    } else {
-		$fileContents .= ',' if $i;
+		if ( $i ) {
+		    # asl has a max of 20 items per line
+		    # 16 is a nicer binary based number
+		    if ( $i % 16 == 0 ) {
+			if ( $tileMapWidth == 1 ) {
+			    $fileContents .= "\n dc.b ";
+			} elsif ( $tileMapWidth == 2 ) {
+			    $fileContents .= "\n dc.w ";
+			} else {
+			    die "Unsupported map width\n";
+			}
+		    } else {
+			$fileContents .= ',';
+		    }
+		}
 		if ( $tileMapWidth == 1 ) {
 		    $fileContents .= sprintf("\$%2.2X",ord(substr($tileMapRow,$i,1)));
 		} elsif ( $tileMapWidth == 2 ) {
