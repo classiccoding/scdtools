@@ -95,14 +95,21 @@ if ( $snasm68k ne '' ) {
 
 my $rc3 = 0;
 if ( $asl ne '' ) {
-    system("cp $asm TMP.ASM");
-    # TODO could add macro file redefine these even for included files
-    # convert incbin to binclude
-    system("perl -pi -e 's/incbin/binclude/' TMP.ASM");
-    # convert even to align 2
-    system("perl -pi -e 's/even/align 2/' TMP.ASM");
-    system("asl -cpu 68000 -xx -c -A TMP.ASM -o TMP.P -shareout TMP.H");
-    system("s2p2bin TMP.P asl.bin TMP.H");
+    if ( open(TMPASM, ">asl.asm") ) {
+	print TMPASM "
+incbin	macro	file
+	binclude file
+	endm
+even	macro
+	align 2
+	endm
+
+	include $asm
+";
+    }
+    close TMPASM;
+    system("asl -cpu 68000 -xx -c -A asl.asm -o asl.p -shareout asl.h");
+    system("s2p2bin asl.p asl.bin asl.h");
     $rc3 = system("diff asmxbgv.bin asl.bin");
 }
 
@@ -123,9 +130,9 @@ if ( ! $rc0 && ! $rc1 && ! $rc2 && ! $rc3 ) {
 	system("rm SNASM68K.BIN");
     }
     if ( $asl ne '' ) {
-	system("rm TMP.ASM");
-	system("rm TMP.P");
-	system("rm TMP.H");
+	system("rm asl.asm");
+	system("rm asl.p");
+	system("rm asl.h");
 	system("rm asl.bin");
     }
     print "All clean\n";
