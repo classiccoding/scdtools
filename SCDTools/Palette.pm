@@ -316,6 +316,11 @@ sub ConvertRGBNormalizedToVDPColor {
 
 sub ConvertVDPColorToRGBNormalized {
     my ($c) = @_;
+    # TODO inverse it
+    # pixel: 0-7
+    # (pixel*32/255) is lowest part
+    # add 1/16 to get to highlight
+    # add 1/32 to get halway between regular and highlight
     return ((ord(substr($c,1,1))&0xE)/15.0,((ord(substr($c,1,1))>>4)&0xE)/15.0,(ord(substr($c,0,1))&0xE)/15.0);
 }
 

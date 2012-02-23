@@ -21,6 +21,7 @@
 
 # TODO ability to change imgLabel?
 # TODO more verbosity...
+# TODO affect colorCount, dithering at the three stages
 
 use strict;
 use warnings;
@@ -34,7 +35,7 @@ my $verbosity = 2;
 
 my $magicPink = 0;
 my $magicBlack = 0;
-my $grey = 0;
+my $colorCountMax = 15;
 
 my @imgFiles;
 
@@ -43,8 +44,6 @@ foreach my $arg (@ARGV) {
 	$magicPink = 1;
     } elsif ( $arg =~ /^-magicblack$/i ) {
 	$magicBlack = 1;
-    } elsif ( $arg =~ /^-gr[ae]y$/i ) {
-	$grey = 1;
     } elsif ( -e $arg ) {
 	push @imgFiles, $arg;
     } else {
@@ -72,7 +71,8 @@ sub ImgExtractColors($) {
     my $img = Image::Magick->new();
     my $x = $img->ReadImage($imgFile);
     warn $x if $x;
-    #$img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
+
+    # $img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
 
     my @colors = &GetSegaColors($img);
     my $colorsLength = $#colors + 1;
@@ -84,35 +84,46 @@ sub ImgExtractColors($) {
 
     for ( my $x = 0; $x < $colorsLength; $x++ ) {
 	my $c = $colors[$x];
-	my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
-		       ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
-		       (   ord(substr($c,1,1))        & 0xE ) / 14 );
-	for ( my $i = 0; $i < 3; $i++ ) {
-	    $pixels[$i] = $pixels[$i]*0.95 + 0.025;
-	}
+	my @pixels = ( ( ( ( ord(substr($c,1,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
+		       ( ( ( ord(substr($c,1,1)) >> 5 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
+		       ( ( ( ord(substr($c,0,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ) );
 	$imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
     }
     
-    if ( $colorsLength > 16 ) {
-	$img->Remap('image'=>$imgPalette,dither=>'true');
+    if ( $colorsLength > $colorCountMax ) {
+	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
+	#$img->Remap('image'=>$imgPalette,dither=>'true');
+	#$img->Remap('image'=>$imgPalette,dither=>'false');
 
+	print "Writing a0.png (mapped to VDP colors, too many colors for single palette still)\n";
 	$img->Write('a0.png');
 
 	undef $imgPalette;
 
-	#$img->Quantize('colors'=>16,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
-	$img->Quantize('colors'=>16,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
+	$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
+	#$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true');
+	#$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
 
+	print "Writing a1.png (quantized to $colorCountMax VDP colors)\n";
 	$img->Write('a1.png');
 
 	@colors = &GetSegaColors($img);
 	$colorsLength = $#colors + 1;
 
-	if ( $colorsLength < 16 ) {
-	    push @colors, chr(0x00).chr(0x00);
-	} elsif ( $colorsLength > 16 ) {
-	    $colorsLength = 16;
+	if ( $colorsLength < $colorCountMax ) {
+	    if ( $magicPink ) {
+		push @colors, chr(0x0E).chr(0x0E);
+		$colorsLength++;
+	    } elsif ( $magicBlack ) {
+		push @colors, chr(0x00).chr(0x00);
+		$colorsLength++;
+	    }
+	} elsif ( $colorsLength > $colorCountMax ) {
+	    print STDERR "Quantization went beyond color count\n";
+	    $colorsLength = $colorCountMax;
 	}
+
+	print "Quantization resulted in $colorsLength VDP colors\n";
 
 	$imgPalette = Image::Magick->new();
 	$imgPalette->Set(size=>"${colorsLength}x1");
@@ -121,29 +132,25 @@ sub ImgExtractColors($) {
 
 	for ( my $x = 0; $x < $colorsLength; $x++ ) {
 	    my $c = $colors[$x];
-	    my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
-			   ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
-			   (   ord(substr($c,1,1))        & 0xE ) / 14 );
-	    for ( my $i = 0; $i < 3; $i++ ) {
-		$pixels[$i] = $pixels[$i]*0.95 + 0.025;
-	    }
+	    my @pixels = ( ( ( ( ord(substr($c,1,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
+			   ( ( ( ord(substr($c,1,1)) >> 5 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
+			   ( ( ( ord(substr($c,0,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ) );
 	    $imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
 	}
-
+    
 	undef $img;
 
 	$img = Image::Magick->new();
 	$x = $img->ReadImage($imgFile);
 	warn $x if $x;
-	#$img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
     }
 
+    $img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
+    #$img->Remap('image'=>$imgPalette,dither=>'true');
+    #$img->Remap('image'=>$imgPalette,dither=>'false');
+
+    print "Writing a2.png (original image dithered to quatized colors)\n";
     $img->Write('a2.png');
-
-    #$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
-    $img->Remap('image'=>$imgPalette,dither=>'true');
-
-    $img->Write('a3.png');
 }
 
 sub GetSegaColors {
@@ -157,24 +164,23 @@ sub GetSegaColors {
 
     for ( my $y = 0; $y < $height; $y++ ) {
 	for ( my $x = 0; $x < $width; $x++ ) {
-	    # process two pixels for a hi and lo nibble
-	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
 	    my $a = 0;
 	    if ( $alpha ) {
 		$a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x,'y'=>$y);
+		if ( $a > 0.95 ) {
+		    next;
+		}
 	    }
-	    my $color;
-	    if ( $grey ) {
-		my $avg = int((85*($r+$g+$b))>>5);
-		$color = chr($avg<<1).chr(($avg<<5)|($avg<<1));
-	    } else {
-		$color = chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
-	    }
+	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
+	    my $color = chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
 	    if ( ( $alpha && defined $a && $a == 1 ) ||
 		 ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
 		 ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
-		next 0;
+		next;
 	    }
+	    #if ( ! exists $colors{$color} ) {
+	    #printf("%4.4X\n",unpack("n",$color));
+	    #}
 	    $colors{$color}++;
 	}
     }
@@ -193,7 +199,6 @@ scdimgvdppalette [options] <imgfiles>
 [options]
   -magicpink          treat #FF00FF as transparent
   -magicblack         treat #000000 as transparent
-  -grey               averages colors for using greyscale palette
 
 ';
 }
