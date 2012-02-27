@@ -201,6 +201,7 @@ $spprefix                 = \'SP\';
 $outprefix                = \'SCD\';
 
 &SetVerbosityIfNotAlreadySet(2);
+&SetCountryIfNotAlreadySet(\'U\');
 
 ';
 
@@ -498,11 +499,6 @@ if ( $fileExtent + $fileExtentCurrentOffset + $padSize > $sectorCount ) {
     $sectorCount = $fileExtent + $fileExtentCurrentOffset + $padSize;
 }
 
-# country based defaults if not set up
-if ( ! defined $scdcountry ) {
-    $scdcountry = 'U';
-}
-
 my $isoSuffix = 'ISO';
 if ( $isoType == 1 ) {
     $isoSuffix = 'BIN';
@@ -557,10 +553,10 @@ sub MakeISO {
 
     # country based defaults if not set up
     if ( ! defined $scdhardware ) {
-	$scdhardware = $scdcountry =~ m/U/ ? 'SEGA GENESIS' : 'SEGA MEGA DRIVE';
+	$scdhardware = $scdcountry =~ m/U/i ? 'SEGA GENESIS' : 'SEGA MEGA DRIVE';
     }
     if ( ! defined $pvdsystemid ) {
-	$pvdsystemid = $scdcountry =~ m/U/ ? 'SEGA_CD' : 'MEGA_CD';
+	$pvdsystemid = $scdcountry =~ m/U/i ? 'SEGA_CD' : 'MEGA_CD';
     }
     if ( ! defined $jolietsystemid ) {
 	$jolietsystemid = $pvdsystemid;
@@ -588,9 +584,9 @@ sub MakeISO {
     # region info, and pad so that all region take up 1412 (U is longest)
     # makes hexdiff of iso easier to look at
     my $propType;
-    if ( $scdcountry =~ m/U/ ) {
+    if ( $scdcountry =~ m/U/i ) {
 	$propType = 'us';
-    } elsif ( $scdcountry =~ m/J/ ) {
+    } elsif ( $scdcountry =~ m/J/i ) {
 	$propType = 'jp';
     } else {
 	$propType = 'eu';
@@ -843,7 +839,7 @@ sub PrintSegaCDDiscID {
     &PrintToIso(&PadString($scddisctype,chr(0x20),2));
     # set 10 bytes to product code
     if ( $scdcompanyname eq 'SEGA' && $scdproductcode =~ m/^[0-9]{4}$/ ) {
-	if ( $scdcountry !~ m/U/ && $scdcountry =~ m/J/ ) {
+	if ( $scdcountry !~ m/U/i && $scdcountry =~ m/J/i ) {
 	    &PrintToIso(" G-$scdproductcode  -");
 	} else {
 	    &PrintToIso(" MK-$scdproductcode -");
@@ -2038,6 +2034,27 @@ sub SetVerbosityIfNotAlreadySet {
 	$verbosity = $_[0];
 	$verbositySet = 1;
     }
+}
+
+sub SetCountryIfNotAlreadySet {
+    if ( ! defined $scdcountry ) {
+	$scdcountry = $_[0];
+    }
+}
+
+sub MakeFPSInc {
+    my $fps = 60;
+    if ( $scdcountry =~ m/[UJ]/i ) {
+	$fps = 60;
+    } elsif ( $scdcountry =~ m/[E]/i ) {
+	$fps = 50;
+    } else {
+	die "Cannot determine frame per second based on $scdcountry\n";
+    }
+    if ( open(FPSINC, ">FPS.INC") ) {
+	print FPSINC "FramesPerSecond: equ 60\n";
+    }
+    close FPSINC;
 }
 
 sub Help {
