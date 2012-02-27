@@ -180,7 +180,7 @@ sub GetOutputPaletteData {
  	if ( $bin ) {
  	    $fileContents .= pack("n",0x0000);
  	} else {   
-	    $fileContents .= " dc.w 0x0000\n";
+	    $fileContents .= " dc.w \$0000\n";
 	}
 	for ( my $i = 0; $i < 15; $i++ ) {
 	    my $colorsIndex = $paletteIndex * 15 + $i;
@@ -188,14 +188,14 @@ sub GetOutputPaletteData {
 		if ( $bin ) {
 		    $fileContents .= $self->{'colors'}[$colorsIndex];
 		} else {
-		    my $colorf = sprintf("0x%4.4X",unpack("n",$self->{'colors'}[$colorsIndex]));
+		    my $colorf = sprintf("\$%4.4X",unpack("n",$self->{'colors'}[$colorsIndex]));
 		    $fileContents .= ' dc.w '.$colorf."\n";
 		}
 	    } else {
 		if ( $bin ) {
 		    $fileContents .= pack("n",0x0000);
 		} else {
-		    $fileContents .= " dc.w 0x0000\n";
+		    $fileContents .= " dc.w \$0000\n";
 		}
 	    }
 	}
@@ -334,7 +334,7 @@ sub PrintMissingColors {
     my @colors = sort {$self->{'colorsMissing'}{$b} <=> $self->{'colorsMissing'}{$a}} keys %{$self->{'colorsMissing'}};
     foreach my $color (@colors) {
 	my $count = $self->{'colorsMissing'}{$color};
-	my $colorf = sprintf("0x%4.4X",unpack("n",$color));
+	my $colorf = sprintf("\$%4.4X",unpack("n",$color));
 	print STDERR "Palette does not contain color: $colorf ($count)\n";
     }
 }
@@ -365,7 +365,7 @@ sub PrintMissingColors {
 # 	    if ( $comments ) {
 # 		print ";; palette\n";
 # 	    }
-# 	    print " dc.w 0x0000\n";
+# 	    print " dc.w \$0000\n";
 # 	}
 # 	for ( my $i = 0; $i < 15; $i++ ) {
 # 	    my $colorsIndex = $paletteIndex * 15 + $i;
@@ -373,14 +373,14 @@ sub PrintMissingColors {
 # 		if ( $bin ) {
 # 		    print $colors[$colorsIndex];
 # 		} else {
-# 		    my $colorf = sprintf("0x%4.4X",unpack("n",$colors[$colorsIndex]));
+# 		    my $colorf = sprintf("\$%4.4X",unpack("n",$colors[$colorsIndex]));
 # 		    print ' dc.w '.$colorf."\n";
 # 		}
 # 	    } else {
 # 		if ( $bin ) {
 # 		    print pack("n",0x0000);
 # 		} else {
-# 		    print " dc.w 0x0000\n";
+# 		    print " dc.w \$0000\n";
 # 		}
 # 	    }
 # 	}
@@ -388,7 +388,7 @@ sub PrintMissingColors {
 # } else {
 #     foreach my $color (@colors) {
 # 	my $count = $missingColors{$color};
-# 	my $colorf = sprintf("0x%4.4X",unpack("n",$color));
+# 	my $colorf = sprintf("\$%4.4X",unpack("n",$color));
 # 	print STDERR "Palette does not contain color: $colorf ($count)\n";
 #     }
 # }
