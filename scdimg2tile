@@ -60,6 +60,7 @@ my $tilesOrderMattered = 0;
 
 my $tileMapOffset = 0;
 my $tileMapWidth = 1;
+my $tileMapWidthBad = 0;
 
 my $comments = 1;
 my $labels = 1;
@@ -122,7 +123,7 @@ foreach my $arg (@ARGV) {
 	$tilesCompress = $1;
     } elsif ( $arg =~ /^-mapoffset=(\d+)$/i ) {
 	$tileMapOffset = $1;
-    } elsif ( $arg =~ /^-mapoffset=0x([0-9A-Fa-f]+)$/i ) {
+    } elsif ( $arg =~ /^-mapoffset=(0x|\$)([0-9A-Fa-f]+)$/i ) {
 	$tileMapOffset = $1;
     } elsif ( $arg =~ /^-mapwidth=([12])$/i ) {
 	$tileMapWidth = $1;
@@ -286,7 +287,22 @@ sub Img2Tile($) {
 	for ( my $y = 0; $y < $height; $y += 8 ) {
 	    my $tileMapRow;
 	    for ( my $x = 0; $x < $width; $x += 8 ) {
-		$tileMapRow .= chr(&ReadImgTile($x,$y));
+		my $tileIndex = &ReadImgTile($x,$y);
+		if ( $tileMapWidth == 1 ) {
+		    if ( $tileIndex < 0 || $tileIndex > 0xFF ) {
+			$tileMapWidthBad = 1;
+		    } else {
+			$tileMapRow .= chr($tileIndex);
+		    }
+		} elsif ( $tileMapWidth == 2 ) {
+		    if ( $tileIndex < 0 || $tileIndex > 0xFFFF ) {
+			$tileMapWidthBad = 1;
+		    } else {
+			$tileMapRow .= pack("n",$tileIndex);
+		    }
+		} else {
+		    die "Unsupported map width\n";
+		}
 	    }
 	    push @tileMapRows, $tileMapRow;
 	}
@@ -517,6 +533,9 @@ sub GetOutputTileMapData {
     if ( $#tileMapRows < 0 ) {
 	return '';
     }
+    if ( $tileMapWidthBad ) {
+	die "Bad tile index data for map width\n";
+    }
     my $fileContents = '';
     if ( ! $bin ) {
 	my $w = int(length($tileMapRows[0])/$tileMapWidth);
@@ -615,7 +634,7 @@ scdimg2tile [options] <imgfiles...>
                         <#>=2: compress to 1 bit color map (2 colors)
   -mapoffset=<#>        the offset for the tile indexes in the tile map
                         can specify decimal using no prefix
-                        can specify hexadecimal number using 0x prefix
+                        can specify hexadecimal number using $ or 0x prefix
   -mapwidth=<#>         specifies the map entry width in bytes (default is 1)
   -plane                specifies plane tile order and no tile reuse (default)
   -planewithmap         specifies plane tile order and tile reuse
