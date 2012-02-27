@@ -90,6 +90,9 @@ sub ImgExtractColors($) {
 	$imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
     }
     
+    print "Writing p0.png (VDP color palette for original image)\n";
+    $imgPalette->Write('p0.png');
+
     if ( $colorsLength > $colorCountMax ) {
 	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
 	#$img->Remap('image'=>$imgPalette,dither=>'true');
@@ -99,6 +102,14 @@ sub ImgExtractColors($) {
 	$img->Write('a0.png');
 
 	undef $imgPalette;
+
+	if ( 1 ) {
+	    undef $img;
+
+	    $img = Image::Magick->new();
+	    $x = $img->ReadImage($imgFile);
+	    warn $x if $x;
+	}
 
 	$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
 	#$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true');
@@ -138,11 +149,16 @@ sub ImgExtractColors($) {
 	    $imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
 	}
     
+	print "Writing p1.png (VDP color palette after quantization)\n";
+	$imgPalette->Write('p1.png');
+
 	undef $img;
 
 	$img = Image::Magick->new();
 	$x = $img->ReadImage($imgFile);
 	warn $x if $x;
+    } else {
+	print "Image only has $colorsLength VDP colors\n";
     }
 
     $img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
@@ -193,8 +209,10 @@ sub Help {
 scdimgvdppalette [options] <imgfiles>
 
 [description]
-  TODO.  Work in progress to convert image to Sega VDP with dithering and
-  palette reduction.  Still not general purpose yet.
+  Convert image to Sega VDP palette with dithering/quantization.
+  It is suggested to avoid transparency since they can become partially
+  transparent in the process and typically result in ugly edges.
+  Still a work in progress.
 
 [options]
   -magicpink          treat #FF00FF as transparent
