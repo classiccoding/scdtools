@@ -24,11 +24,14 @@ use warnings;
 my $cmd = 'asmx -C 68000 -b 0 -e -w';
 
 my $verbosity = 2;
+my $options = '';
 
 my @args;
 foreach my $arg (@ARGV) {
     if ( $arg =~ m/^-v=(\d+)$/i ) {
 	$verbosity = $1;
+    } elsif ( $arg =~ m/^-options=(.*)$/i ) {
+	$options .= ' '.$1;
     } else {
 	push @args, $arg;
     }
@@ -37,12 +40,12 @@ foreach my $arg (@ARGV) {
 if ( $#args == 1 ) {
     my $asm = $args[0];
     my $bin = $args[1];
-    $cmd .= " -o $bin -- $asm";
+    $cmd .= " $options -o $bin -- $asm";
 } elsif ( $#args == 2 ) {
     my $asm = $args[0];
     my $bin = $args[1];
     my $lst = $args[2];
-    $cmd .= " -l $lst -o $bin -- $asm";
+    $cmd .= " $options -l $lst -o $bin -- $asm";
 } else {
     &Help();
 }
@@ -78,7 +81,8 @@ scdasm [options] <asmfile> <binfile> [lstfile]
   wrapper script for assembling 68k code
 
 [options]
-  -v=<#>              specify verbosity
+  -v=<#>               specify verbosity
+  -options=<options>   options to send to assembler
 
 ';
 }
