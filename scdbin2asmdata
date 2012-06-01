@@ -125,10 +125,19 @@ if ( $asmFile eq '' || $asmFile eq '-' ) {
 
 sub Help {
     die '
-scdbin2asmdata [options] <binfile> [asmfile]
+scdbin2asmdata [options] <inputfile> [outputfile]
 
 [description]
-  converts binary data to asm data
+  Converts binary data to asm data.  If the inputfile has ASM or 68K file
+  extension, scdasm will be used to make a temporary binary file.  If no output
+  file is given, the asm data will be piped to standard output.  Options
+  allow changing the directives used to accomodate different styles and
+  assemblers.
+
+[sample output]
+  the following is the default format for a single VDP palette (32 bytes)
+        dc.w    $0EEE,$0EEE,$0CCC,$0CCC,$0AAA,$0AAA,$0888,$0888
+        dc.w    $0666,$0666,$0444,$0444,$0222,$0222,$0000,$0000
 
 [options]
   -directive=<directive>   specifies directive, such as dc.b, dc.w, etc
