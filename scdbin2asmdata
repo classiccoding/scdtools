@@ -107,6 +107,11 @@ if ( open(BIN, $binFile) ) {
 
 close BIN;
 
+# delete any temporary files
+if ( $binFile ne $binFileIn ) {
+     unlink $binFile;
+}
+
 if ( $asmFile eq '' || $asmFile eq '-' ) {
     print $asmData;
 } else {
