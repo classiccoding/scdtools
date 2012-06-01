@@ -1,0 +1,135 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2012 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+use strict;
+use warnings;
+
+my $verbosity = 2;
+
+my $directive = 'dc.w';
+my $directiveSize = -1;
+my $directiveCount = 8;
+
+my $binFileIn = '';
+my $asmFile = '';
+
+my @args;
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-directive=(.+)$/i ) {
+	$directive = $1;
+    } elsif ( $arg =~ m/^-directivesize=(\d+)$/i ) {
+	$directiveSize = $1;
+    } elsif ( $arg =~ m/^-directivecount=(\d+)$/i ) {
+	$directiveCount = $1;
+    } elsif ( $arg =~ /^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } else {
+	push @args, $arg;
+    }
+}
+
+if ( $directiveSize <= 0 ) {
+    if ( $directive =~ /^dc\.b$/i ) {
+	$directiveSize = 1;
+    } elsif ( $directive =~ /^dc\.w$/i ) {
+	$directiveSize = 2;
+    } elsif ( $directive =~ /^dc\.l$/i ) {
+	$directiveSize = 4;
+    } else {
+	print STDERR "Cannot understand directive \"$directive\" and did not specify -directiveSize\n";
+	&Help();
+    }
+}
+
+
+if ( $#args == 0 ) {
+    $binFileIn = $args[0];
+    $asmFile = '';
+} elsif ( $#args == 1 ) {
+    $binFileIn = $args[0];
+    $asmFile = $args[1];
+} else {
+    &Help();
+}
+
+my $binFile = $binFileIn;
+if ( $binFileIn =~ m/\.(asm|68k)$/i ) {
+    $binFile = 'TMP.BIN';
+    system("scdasm -v=$verbosity $binFileIn $binFile");
+    if ( ! -e $binFile ) {
+	die "Bad scdasm since didn't make: $binFile";
+    }
+}
+
+my $binSize = -s $binFile;
+
+my $asmData = '';
+if ( open(BIN, $binFile) ) {
+    binmode BIN;
+    my $directiveIndex = 0;
+    my $directiveEntryValue = '';
+    for ( my $binIndex = 0; $binIndex < $binSize; $binIndex += $directiveSize ) {
+	# TODO ignore error for now
+	read(BIN,$directiveEntryValue,$directiveSize);
+	if ( $directiveIndex <= 0 ) {
+	    $asmData .= "\t$directive\t";
+	} else {
+	    $asmData .= ",";
+	}
+	$asmData .= "\$".uc(unpack("H*",$directiveEntryValue));
+	$directiveIndex++;
+	if ( $directiveIndex >= $directiveCount ) {
+	    $asmData .= "\n";
+	    $directiveIndex = 0;
+	}
+    }
+    if ( $directiveIndex >= 0 ) {
+	$asmData .= "\n";
+	$directiveIndex = 0;
+    }
+}
+
+close BIN;
+
+if ( $asmFile eq '' || $asmFile eq '-' ) {
+    print $asmData;
+} else {
+    if ( open( ASM, '>'.$asmFile ) ) {
+	print ASM $asmData;
+    }
+    close ASM;
+}
+
+
+
+sub Help {
+    die '
+scdbin2asmdata [options] <binfile> [asmfile]
+
+[description]
+  converts binary data to asm data
+
+[options]
+  -directive=<directive>   specifies directive, such as dc.b, dc.w, etc
+  -directivesize=<#>       number of bytes used in each directive entry
+  -directivecount=<#>      number of directive entries per line
+  -v=<#>                   specify verbosity
+
+';
+}
