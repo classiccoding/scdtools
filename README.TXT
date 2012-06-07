@@ -4,6 +4,8 @@ scdasm
   Wrapper for your favorite assembler and favorite options
 scdasmall
   Run asmx, asm68k, and SNASM68K and verify they have the same output
+scdbin2asmdata
+  Convert binary data to asm data streams
 scdchecksum
   A specific tool to make a 16 bit checksum for all but first two bytes
   and put the 16 bit checksum at the first two bytes of the file.
