@@ -209,6 +209,9 @@ eval($defaults);
 warn $@ if $@;
 $verbositySet = 0;
 
+my $cfg = 'SCDMAKE.CFG';
+my $inc = 'SCDMAKE.INC';
+
 my $loop;
 foreach my $arg (@ARGV) {
     if ( $arg =~ m/^-country=([uje]|all)$/i ) {
@@ -216,14 +219,23 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
 	$verbosity = $1;
 	$verbositySet++;
+    } elsif ( $arg eq '-make' ) {
+	if ( -e $cfg ) {
+	    print STDERR "Will not override existing $cfg\n";
+	} else {
+	    print STDERR "Making a default $cfg config file\n";
+	    if ( open( CFG, ">$cfg" ) ) {
+		print CFG $defaults;
+	    }
+	    close CFG;
+	}
+	exit;
     } else {
 	print "Bad argument: $arg\n";
 	&Help();
     }
 }
 
-my $cfg = 'SCDMAKE.CFG';
-my $inc = 'SCDMAKE.INC';
 if ( -e $cfg ) {
     if ( open( CFG, $cfg ) ) {
 	binmode CFG;
@@ -234,14 +246,6 @@ if ( -e $cfg ) {
 	}
     }
     close CFG;
-} elsif ( $#ARGV >= 0 &&
-	  $ARGV[0] eq '-make' ) {
-    print STDERR "Making a default $cfg config file\n";
-    if ( open( CFG, ">$cfg" ) ) {
-	print CFG $defaults;
-    }
-    close CFG;
-    exit;
 } else {
     print "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
     &Help();
