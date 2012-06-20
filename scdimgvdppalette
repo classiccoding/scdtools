@@ -21,7 +21,7 @@
 
 # TODO ability to change imgLabel?
 # TODO more verbosity...
-# TODO affect colorCount, dithering at the three stages
+# TODO reduce size to 320x240 if larger (scaling)
 
 use strict;
 use warnings;
@@ -39,11 +39,25 @@ my $colorCountMax = 15;
 
 my @imgFiles;
 
+my $ditherVdp = 'fs';
+my $ditherQuantize = 'fs';
+my $ditherFinal = 'fs';
+
 foreach my $arg (@ARGV) {
     if ( $arg =~ /^-magicpink$/i ) {
 	$magicPink = 1;
     } elsif ( $arg =~ /^-magicblack$/i ) {
 	$magicBlack = 1;
+    } elsif ( $arg =~ /^-dither=(none|r|fs)$/i ) {
+	$ditherVdp = lc($1);
+	$ditherQuantize = lc($1);
+	$ditherFinal = lc($1);
+    } elsif ( $arg =~ /^-dithervdp=(none|r|fs)$/i ) {
+	$ditherVdp = lc($1);
+    } elsif ( $arg =~ /^-ditherquantize=(none|r|fs)$/i ) {
+	$ditherQuantize = lc($1);
+    } elsif ( $arg =~ /^-ditherfinal=(none|r|fs)$/i ) {
+	$ditherFinal = lc($1);
     } elsif ( -e $arg ) {
 	push @imgFiles, $arg;
     } else {
@@ -94,9 +108,15 @@ sub ImgExtractColors($) {
     $imgPalette->Write('p0.png');
 
     if ( $colorsLength > $colorCountMax ) {
-	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
-	#$img->Remap('image'=>$imgPalette,dither=>'true');
-	#$img->Remap('image'=>$imgPalette,dither=>'false');
+	if ( $ditherVdp eq 'none' ) {
+	    $img->Remap('image'=>$imgPalette,dither=>'false');
+	} elsif ( $ditherVdp eq 'r' ) {
+	    $img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Riemersma');
+	} elsif ( $ditherVdp eq 'fs' ) {
+	    $img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
+	} else {
+	    die "Bad dither final: $ditherVdp\n";
+	}
 
 	print "Writing a0.png (mapped to VDP colors, too many colors for single palette still)\n";
 	$img->Write('a0.png');
@@ -111,9 +131,15 @@ sub ImgExtractColors($) {
 	    warn $x if $x;
 	}
 
-	$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
-	#$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true');
-	#$img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
+	if ( $ditherQuantize eq 'none' ) {
+	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
+	} elsif ( $ditherQuantize eq 'r' ) {
+	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Riemersma');
+	} elsif ( $ditherQuantize eq 'fs' ) {
+	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
+	} else {
+	    die "Bad dither final: $ditherQuantize\n";
+	}
 
 	print "Writing a1.png (quantized to $colorCountMax VDP colors)\n";
 	$img->Write('a1.png');
@@ -161,9 +187,15 @@ sub ImgExtractColors($) {
 	print "Image only has $colorsLength VDP colors\n";
     }
 
-    $img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
-    #$img->Remap('image'=>$imgPalette,dither=>'true');
-    #$img->Remap('image'=>$imgPalette,dither=>'false');
+    if ( $ditherFinal eq 'none' ) {
+	$img->Remap('image'=>$imgPalette,dither=>'false');
+    } elsif ( $ditherFinal eq 'r' ) {
+	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Riemersma');
+    } elsif ( $ditherFinal eq 'fs' ) {
+	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
+    } else {
+	die "Bad dither final: $ditherFinal\n";
+    }
 
     print "Writing a2.png (original image dithered to quatized colors)\n";
     $img->Write('a2.png');
@@ -215,8 +247,17 @@ scdimgvdppalette [options] <imgfiles>
   Still a work in progress.
 
 [options]
-  -magicpink          treat #FF00FF as transparent
-  -magicblack         treat #000000 as transparent
+  -magicpink                 treat #FF00FF as transparent
+  -magicblack                treat #000000 as transparent
+
+[dither options]
+  -dither=<dither>           set all dithering
+  -dithervdp=<dither>        set dithering of palette to VDP colors
+  -ditherquantize=<dither>   set dithering of palette quantization
+  -ditherfinal=<dither>      set dithering of final image
+  <dither>                   none - no dithering
+                             r    - Riemersma dithering
+                             fs   - Floyd-Steinberg dithering (default)
 
 ';
 }
