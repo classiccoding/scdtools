@@ -191,9 +191,11 @@ if ( read(WAVE,$data,$chunkLength) != $chunkLength ) {
 close WAVE;
 
 my $pcmData = '';
+my $maxAmp = 0;
 for ( my $i = $channel; $i < $chunkLength; $i += $fmtNumberOfChannels ) {
     my $valueWave = ord(substr($data,$i,1));
     my $value;
+    my $amp = 0;
     if ( $valueWave == 0x80 ) {
 	if ( $midpointIsPositive ) {
 	    $value = 0x00;
@@ -201,9 +203,14 @@ for ( my $i = $channel; $i < $chunkLength; $i += $fmtNumberOfChannels ) {
 	    $value = 0x80;
 	}
     } elsif ( $valueWave >= 0x80 ) {
-	$value = $valueWave - 0x80;
+	$amp = $valueWave - 0x80;
+	$value = 0x00 | $amp;
     } else {
-	$value = 0x80 | ( 0x80 - $valueWave );
+	$amp = 0x80 - $valueWave;
+	$value = 0x80 | $amp;
+    }
+    if ( $amp > $maxAmp ) {
+	$maxAmp = $amp;
     }
     if ( $value == 0xFF ) {
 	print STDERR "truncating waveform\n";
@@ -219,6 +226,7 @@ close PCM;
 
 my $pcmFD = int(0.5+$fmtSampleRate/(12500000/384)*0x800);
 print "Wave sample rate corresponds to a Sega CD PCM FD register value of ".sprintf("0x%4.4X",$pcmFD)."\n";
+print "Wave data had a max 8 bit amplitude of ".$maxAmp." (highest is 127)\n";
 
 
 
