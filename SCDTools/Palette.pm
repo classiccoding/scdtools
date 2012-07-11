@@ -258,7 +258,7 @@ sub AddColor {
     my $index = -1;
     if ( $self->{'colorsCount'} < 15 * $self->{'paletteCount'} ) {
 	push @{$self->{'colors'}}, $color;
-	$index = $self->{'colorsCount'} + int($self->{'colorsCount'} / 15);
+	$index = $self->{'colorsCount'} + int($self->{'colorsCount'} / 15) + 1;
 	$self->{'colorsCount'}++;
 	# debug print
 	# printf("Adding color $index : \$%4.4X\n",unpack("n",$color));
