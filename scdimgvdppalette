@@ -32,7 +32,6 @@ use lib $FindBin::Bin;
 use SCDTools::Palette;
 
 my $palette = SCDTools::Palette->new();
-$palette->SetPaletteCount(512/16);
 
 if ( $#ARGV < 0 ) {
     &Help();
@@ -44,6 +43,8 @@ my $colorCountMax = 15;
 
 my @imgFiles;
 
+my $resizeWidth = 0;
+my $resizeHeight = 0;
 my $resizeToTiles = 0;
 my $ditherVdp = 'fs';
 my $ditherQuantize = 'fs';
@@ -53,6 +54,9 @@ my $debug = 0;
 foreach my $arg (@ARGV) {
     if ( $palette->ParseArg($arg) ) {
 	# do nothing
+    } elsif ( $arg =~ /^-resize=(\d+)x(\d+)$/i ) {
+	$resizeWidth = $1;
+	$resizeHeight = $2;
     } elsif ( $arg =~ /^-resizetotiles?$/i ) {
 	$resizeToTiles = 1;
     } elsif ( $arg =~ /^-dither=(none|r|fs)$/i ) {
@@ -75,6 +79,14 @@ foreach my $arg (@ARGV) {
     }
 }
 
+$palette->ReadPalette();
+my $useColors = ( $palette->GetColorsCount() > 0 ? 1 : 0 );
+
+if ( ! $useColors ) {
+    # if not using palette allow lots of palettes for color overflow
+    $palette->SetPaletteCount(512/16);
+}
+
 foreach my $imgFile (@imgFiles) {
     &ImgExtractColors($imgFile);
 }
@@ -95,7 +107,10 @@ sub ImgExtractColors($) {
     my $x = $imgOriginal->ReadImage($imgFile);
     warn $x if $x;
 
-    if ( $resizeToTiles ) {
+    if ( $resizeWidth && $resizeHeight ) {
+	# possible filters: Point, Box, Triangle, Hermite, Hanning, Hamming, Blackman, Gaussian, Quadratic, Cubic, Catrom, Mitchell, Lanczos, Bessel, Sinc
+	$imgOriginal->Resize('width'=>$resizeWidth,'height'=>$resizeHeight,'filter'=>'Cubic');
+    } elsif ( $resizeToTiles ) {
 	my $width = $imgOriginal->Get('width');
 	my $height = $imgOriginal->Get('height');
 	if ( $width % 8 != 0 || $height % 8 != 0 ) {
@@ -107,10 +122,13 @@ sub ImgExtractColors($) {
 
     my $img = $imgOriginal->Clone();
 
-    # reset back to zero colors
-    $palette->SetMaxColorCount(0);
+    if ( ! $useColors ) {
+	# reset back to zero colors
+	$palette->SetMaxColorCount(0);
 
-    $palette->AddColorsFromImageMagickImage($img);
+	$palette->AddColorsFromImageMagickImage($img);
+    }
+
     my $colorsLength = $palette->GetColorsCount();
 
     my $imgPalette = Image::Magick->new();
@@ -159,11 +177,13 @@ sub ImgExtractColors($) {
 	    $img->Write($file);
 	}
 
-	# reset back to zero colors
-	$palette->SetMaxColorCount(0);
+	if ( ! $useColors ) {
+	    # reset back to zero colors
+	    $palette->SetMaxColorCount(0);
 
-	$palette->AddColorsFromImageMagickImage($img);
-	$colorsLength = $palette->GetColorsCount();
+	    $palette->AddColorsFromImageMagickImage($img);
+	    $colorsLength = $palette->GetColorsCount();
+	}
 
 	# TODO needed?
 	# if ( $colorsLength < $colorCountMax ) {
@@ -195,7 +215,7 @@ sub ImgExtractColors($) {
 	}
 
 	$img = $imgOriginal->Clone();
-    } else {
+    } elsif ( ! $useColors ) {
 	print "Image only has $colorsLength VDP colors\n";
     }
 
@@ -205,7 +225,7 @@ sub ImgExtractColors($) {
 	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Riemersma');
     } elsif ( $ditherFinal eq 'fs' ) {
 	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
-    } else {
+    } elsif ( ! $useColors ) {
 	die "Bad dither final: $ditherFinal\n";
     }
 
@@ -229,8 +249,10 @@ scdimgvdppalette [options] <imgfiles>
   Still a work in progress.
 
 '.$palette->GetHelpString().'[options]
+  -resize=<x>x<y>            resize to a specific size
   -resizetotiles             resize the image to a tile boundary
                              (centered and uses black for pixel fill)
+
 [dither options]
   -dither=<dither>           set all dithering
   -dithervdp=<dither>        set dithering of palette to VDP colors
