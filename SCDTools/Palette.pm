@@ -61,6 +61,24 @@ sub new {
    return $self;
 }
 
+sub SetMaxColorCount {
+    my ($self,$count) = @_;
+    if ( $self->{'colorsCount'} > $count ) {
+	splice(@{$self->{'colors'}},$count);
+	$self->{'colorsCount'} = $count;
+    }
+}
+
+sub GetColorsCount {
+    my ($self) = @_;
+    return $self->{'colorsCount'};
+}
+
+sub SetPaletteCount {
+    my ($self,$arg) = @_;
+    $self->{'paletteCount'} = $arg;
+}
+
 sub ParseArg {
     my ($self,$arg) = @_;
     if ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
@@ -240,13 +258,40 @@ sub AddColor {
     my $index = -1;
     if ( $self->{'colorsCount'} < 15 * $self->{'paletteCount'} ) {
 	push @{$self->{'colors'}}, $color;
-	$self->{'colorsCount'}++;
 	$index = $self->{'colorsCount'} + int($self->{'colorsCount'} / 15);
+	$self->{'colorsCount'}++;
+	# debug print
+	# printf("Adding color $index : \$%4.4X\n",unpack("n",$color));
     } else {
 	$self->{'colorsMissing'}{$color}++;
 	$index = -1;
     }
     return $index;
+}
+
+sub AddColorsFromImageMagickImage {
+    my ($self,$img) = @_;
+    use Image::Magick;
+
+    my $width = $img->Get('width');
+    my $height = $img->Get('height');
+    my $alpha = $img->Get('matte');
+
+    for ( my $y = 0; $y < $height; $y++ ) {
+	for ( my $x = 0; $x < $width; $x++ ) {
+	    my $a = 0;
+	    if ( $alpha ) {
+		$a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x,'y'=>$y);
+		# TODO 95% or 100% or something else?
+		if ( defined $a && $a > 0.95 ) {
+		    next;
+		}
+	    }
+	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
+	    my $color = &SCDTools::Palette::ConvertRGBNormalizedToVDPColor($r,$g,$b);
+	    $self->GetColorIndex($color);
+	}
+    }
 }
 
 sub UpdateImageMagickPalette {
@@ -255,20 +300,14 @@ sub UpdateImageMagickPalette {
 
     my $colorsCount = $self->{'colorsCount'};
 
-    #my $imgPalette = Image::Magick->new();
     $imgPalette->Set(size=>"${colorsCount}x1");
     my $x = $imgPalette->ReadImage('xc:black');
     warn $x if $x;
 
     for ( my $colorsIndex = 0; $colorsIndex < $colorsCount; $colorsIndex++ ) {
-	my $c = $self->{'colors'}[$colorsIndex];
-	my @pixels = ( (   ord(substr($c,0,1))        & 0xE ) / 14,
-		       ( ( ord(substr($c,1,1)) >> 4 ) & 0xE ) / 14,
-		       (   ord(substr($c,1,1))        & 0xE ) / 14 );
-	for ( my $i = 0; $i < 3; $i++ ) {
-	    $pixels[$i] = $pixels[$i]*0.95 + 0.025;
-	}
-	$imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
+	my $color = $self->{'colors'}[$colorsIndex];
+	my @pixels = &ConvertVDPColorToRGBNormalized($color);
+	$imgPalette->SetPixel('channel'=>'RGB','x'=>$colorsIndex,'y'=>0,'color'=>\@pixels);
     }
 }
 

@@ -50,8 +50,11 @@ my $pcmDataRate = 16000;
 my $pcmFramePrefix = 'pcmchunk';
 
 my $customEncodingFile = '';
-
+# TODO can remove single palette for -paldatas=<palette>
 my $singlePalette = '';
+my $paldatasString = 'paldata*.bin';
+my $palmapsString = 'palmap*.bin';
+my $cinepaktiledatasString = 'cinepaktiledata*.bin';
 
 # parse args
 foreach my $arg (@ARGV) {
@@ -78,6 +81,12 @@ foreach my $arg (@ARGV) {
 	$pcmDataRate = $1;
     } elsif ( $arg =~ /^-singlepalette=(.+)$/i ) {
 	$singlePalette = $1;
+    } elsif ( $arg =~ /^-paldatas=(.+)$/i ) {
+	$paldatasString = $1;
+    } elsif ( $arg =~ /^-palmaps=(.+)$/i ) {
+	$palmapsString = $1;
+    } elsif ( $arg =~ /^-cinepaktiledatas=(.+)$/i ) {
+	$cinepaktiledatasString = $1;
     } else {
 	print STDERR "\nCould not parse argument: $arg\n";
 	&Help();
@@ -154,9 +163,9 @@ if ( $customEncodingFile ne '' ) {
     }
     eval($customEval);
 } else {
-    my @paldatas = sort <paldata*.bin>;
-    my @palmaps = sort <palmap*.bin>;
-    my @cinepaktiledatas = sort <cinepaktiledata*.bin>;
+    my @paldatas = sort <${paldatasString}>;
+    my @palmaps = sort <${palmapsString}>;
+    my @cinepaktiledatas = sort <${cinepaktiledatasString}>;
     my $palmapsCount = $#palmaps+1;
     for ( my $i = 0; $i <= $#cinepaktiledatas; $i++ ) {
 	if ( $singlePalette ) {
@@ -207,6 +216,10 @@ print
 
 sub AddImgFrame {
     my ($imgDuration,$imgPalette,$imgPaletteMap,$imgMap) = @_;
+    # TODO option for debug info for custom?
+    if ( 0 ) {
+	print STDERR "AddImgFrame($imgDuration,$imgPalette,$imgPaletteMap,$imgMap)\n";
+    }
     $imgDuration *= $pcmFD / 0x0400;
     while ( $pcmFrameIndex < $pcmFrameCount &&
 	    $imgTimeCurrent > $pcmTimeCurrent ) {
@@ -366,20 +379,26 @@ scdcinepakencode [options] > <ASMFILE>
   using the custom usage.
 
 [options]
-  -width=<#>             sets the pixel width of the images
-  -height=<#>            sets the pixel height of the images
-  -size=<#>x<#>          sets the pixel width by height of the images
-  -id=<id>               set the four character id (defaults to SEGA)
-  -baserate=<#>          sets the base rate (ignored, not sure if used,
-                         defaults to 600)
-  -frameduration=<#>     sets the frame duration (only used when not custom)
-  -pcmfile=<file>        pcm file, if not specified, will produce silent movie
-  -pcmfd=<#>             accomodates an encoder with a different FD value
-  -pcmrate=<#>           acoomadates an encoder with a different PCM data rate
-  -singlepalette=<file>  all files use the same single palette
-  -custom=<file>         indicates a PERL file to customize the frames
-                         otherwise uses paldata*.bin, palmap*.bin,
-                         cinepaktiledata*.bin
+  -width=<#>               sets the pixel width of the images
+  -height=<#>              sets the pixel height of the images
+  -size=<#>x<#>            sets the pixel width by height of the images
+  -id=<id>                 set the four character id (defaults to SEGA)
+  -baserate=<#>            sets the base rate (ignored, not sure if used,
+                           defaults to 600)
+  -frameduration=<#>       sets the frame duration (only used when not custom)
+  -pcmfile=<file>          pcm file, if not specified, will produce silent movie
+  -pcmfd=<#>               accomodates an encoder with a different FD value
+  -pcmrate=<#>             acoomadates an encoder with a different PCM data rate
+  -singlepalette=<file>    all files use the same single palette
+  -paldatas=<expr>         file expr for palette data files
+                           (defaults to paldata*.bin)
+  -palmaps=<expr>          file expr for palette map files
+                           (defaults to palmap*.bin)
+  -cinepaktiledatas=<expr> file expr for cinepak tile data files
+                           (defaults to cinepaktiledata*.bin)
+  -custom=<file>           indicates a PERL file to customize the frames
 
 ';
 }
+
+

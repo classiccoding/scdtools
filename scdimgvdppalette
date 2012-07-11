@@ -27,27 +27,34 @@ use strict;
 use warnings;
 use Image::Magick;
 
+use FindBin;
+use lib $FindBin::Bin;
+use SCDTools::Palette;
+
+my $palette = SCDTools::Palette->new();
+$palette->SetPaletteCount(512/16);
+
 if ( $#ARGV < 0 ) {
     &Help();
 }
 
 my $verbosity = 2;
 
-my $magicPink = 0;
-my $magicBlack = 0;
 my $colorCountMax = 15;
 
 my @imgFiles;
 
+my $resizeToTiles = 0;
 my $ditherVdp = 'fs';
 my $ditherQuantize = 'fs';
 my $ditherFinal = 'fs';
+my $debug = 0;
 
 foreach my $arg (@ARGV) {
-    if ( $arg =~ /^-magicpink$/i ) {
-	$magicPink = 1;
-    } elsif ( $arg =~ /^-magicblack$/i ) {
-	$magicBlack = 1;
+    if ( $palette->ParseArg($arg) ) {
+	# do nothing
+    } elsif ( $arg =~ /^-resizetotiles?$/i ) {
+	$resizeToTiles = 1;
     } elsif ( $arg =~ /^-dither=(none|r|fs)$/i ) {
 	$ditherVdp = lc($1);
 	$ditherQuantize = lc($1);
@@ -58,6 +65,8 @@ foreach my $arg (@ARGV) {
 	$ditherQuantize = lc($1);
     } elsif ( $arg =~ /^-ditherfinal=(none|r|fs)$/i ) {
 	$ditherFinal = lc($1);
+    } elsif ( $arg =~ /^-debug$/i ) {
+	$debug = 1;
     } elsif ( -e $arg ) {
 	push @imgFiles, $arg;
     } else {
@@ -82,30 +91,36 @@ sub ImgExtractColors($) {
     $imgLabel =~ s/\..*$//g;
     $imgLabel =~ s/[^A-Za-z0-9]//g;
 
-    my $img = Image::Magick->new();
-    my $x = $img->ReadImage($imgFile);
+    my $imgOriginal = Image::Magick->new();
+    my $x = $imgOriginal->ReadImage($imgFile);
     warn $x if $x;
 
-    # $img->Extent('width'=>256,'height'=>224,'x'=>-32,'y'=>0,'background'=>'rgb(0,0,0)');
+    if ( $resizeToTiles ) {
+	my $width = $imgOriginal->Get('width');
+	my $height = $imgOriginal->Get('height');
+	if ( $width % 8 != 0 || $height % 8 != 0 ) {
+	    my $widthNew = ($width+7) & 0xFFF8;
+	    my $heightNew = ($height+7) & 0xFFF8;
+	    $imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>(($widthNew-$width)>>1),'y'=>(($heightNew-$heightNew)>>1),'background'=>'rgb(0,0,0)');
+	}
+    }
 
-    my @colors = &GetSegaColors($img);
-    my $colorsLength = $#colors + 1;
+    my $img = $imgOriginal->Clone();
+
+    # reset back to zero colors
+    $palette->SetMaxColorCount(0);
+
+    $palette->AddColorsFromImageMagickImage($img);
+    my $colorsLength = $palette->GetColorsCount();
 
     my $imgPalette = Image::Magick->new();
-    $imgPalette->Set(size=>"${colorsLength}x1");
-    $x = $imgPalette->ReadImage('xc:black');
-    warn $x if $x;
-
-    for ( my $x = 0; $x < $colorsLength; $x++ ) {
-	my $c = $colors[$x];
-	my @pixels = ( ( ( ( ord(substr($c,1,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
-		       ( ( ( ord(substr($c,1,1)) >> 5 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
-		       ( ( ( ord(substr($c,0,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ) );
-	$imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
-    }
+    $palette->UpdateImageMagickPalette($imgPalette);
     
-    print "Writing p0.png (VDP color palette for original image)\n";
-    $imgPalette->Write('p0.png');
+    if ( $debug ) {
+	my $file = 'scdimgvdppalette_debugpal0_'.$imgFile;
+	print "Writing $file (VDP color palette for original image)\n";
+	$imgPalette->Write($file);
+    }
 
     if ( $colorsLength > $colorCountMax ) {
 	if ( $ditherVdp eq 'none' ) {
@@ -118,18 +133,15 @@ sub ImgExtractColors($) {
 	    die "Bad dither final: $ditherVdp\n";
 	}
 
-	print "Writing a0.png (mapped to VDP colors, too many colors for single palette still)\n";
-	$img->Write('a0.png');
+	if ( $debug ) {
+	    my $file = 'scdimgvdppalette_debugimg0_'.$imgFile;
+	    print "Writing $file (mapped to VDP colors, too many colors for single palette still)\n";
+	    $img->Write($file);
+	}
 
 	undef $imgPalette;
 
-	if ( 1 ) {
-	    undef $img;
-
-	    $img = Image::Magick->new();
-	    $x = $img->ReadImage($imgFile);
-	    warn $x if $x;
-	}
+	$img = $imgOriginal->Clone();
 
 	if ( $ditherQuantize eq 'none' ) {
 	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
@@ -141,48 +153,48 @@ sub ImgExtractColors($) {
 	    die "Bad dither final: $ditherQuantize\n";
 	}
 
-	print "Writing a1.png (quantized to $colorCountMax VDP colors)\n";
-	$img->Write('a1.png');
-
-	@colors = &GetSegaColors($img);
-	$colorsLength = $#colors + 1;
-
-	if ( $colorsLength < $colorCountMax ) {
-	    if ( $magicPink ) {
-		push @colors, chr(0x0E).chr(0x0E);
-		$colorsLength++;
-	    } elsif ( $magicBlack ) {
-		push @colors, chr(0x00).chr(0x00);
-		$colorsLength++;
-	    }
-	} elsif ( $colorsLength > $colorCountMax ) {
-	    print STDERR "Quantization went beyond color count\n";
-	    $colorsLength = $colorCountMax;
+	if ( $debug ) {
+	    my $file = 'scdimgvdppalette_debugimg1_'.$imgFile;
+	    print "Writing $file (quantized to $colorCountMax VDP colors)\n";
+	    $img->Write($file);
 	}
+
+	# reset back to zero colors
+	$palette->SetMaxColorCount(0);
+
+	$palette->AddColorsFromImageMagickImage($img);
+	$colorsLength = $palette->GetColorsCount();
+
+	# TODO needed?
+	# if ( $colorsLength < $colorCountMax ) {
+	#     if ( $magicPink ) {
+	# 	$palette->GetColorIndex(chr(0x0E).chr(0x0E));
+	#     } elsif ( $magicBlack ) {
+	# 	$palette->GetColorIndex(chr(0x00).chr(0x00));
+	#     }
+	# }
+
+	# $colorsLength = $palette->GetColorsCount();
+
+	if ( $colorsLength > $colorCountMax ) {
+	    print STDERR "Quantization went beyond color count\n";
+	    $palette->SetMaxColorCount($colorCountMax);
+	}
+
+	$colorsLength = $palette->GetColorsCount();
 
 	print "Quantization resulted in $colorsLength VDP colors\n";
 
 	$imgPalette = Image::Magick->new();
-	$imgPalette->Set(size=>"${colorsLength}x1");
-	$x = $imgPalette->ReadImage('xc:black');
-	warn $x if $x;
+	$palette->UpdateImageMagickPalette($imgPalette);
 
-	for ( my $x = 0; $x < $colorsLength; $x++ ) {
-	    my $c = $colors[$x];
-	    my @pixels = ( ( ( ( ord(substr($c,1,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
-			   ( ( ( ord(substr($c,1,1)) >> 5 ) & 7 ) * 32 / 255.0 + 1/32.0 ),
-			   ( ( ( ord(substr($c,0,1)) >> 1 ) & 7 ) * 32 / 255.0 + 1/32.0 ) );
-	    $imgPalette->SetPixel('channel'=>'RGB','x'=>$x,'y'=>0,'color'=>\@pixels);
+	if ( $debug ) {
+	    my $file = 'scdimgvdppalette_debugpal1_'.$imgFile;
+	    print "Writing $file (VDP color palette after quantization)\n";
+	    $imgPalette->Write($file);
 	}
-    
-	print "Writing p1.png (VDP color palette after quantization)\n";
-	$imgPalette->Write('p1.png');
 
-	undef $img;
-
-	$img = Image::Magick->new();
-	$x = $img->ReadImage($imgFile);
-	warn $x if $x;
+	$img = $imgOriginal->Clone();
     } else {
 	print "Image only has $colorsLength VDP colors\n";
     }
@@ -197,43 +209,13 @@ sub ImgExtractColors($) {
 	die "Bad dither final: $ditherFinal\n";
     }
 
-    print "Writing a2.png (original image dithered to quatized colors)\n";
-    $img->Write('a2.png');
-}
-
-sub GetSegaColors {
-    my $img = $_[0];
-
-    my %colors;
-
-    my $width = $img->Get('width');
-    my $height = $img->Get('height');
-    my $alpha = $img->Get('matte');
-
-    for ( my $y = 0; $y < $height; $y++ ) {
-	for ( my $x = 0; $x < $width; $x++ ) {
-	    my $a = 0;
-	    if ( $alpha ) {
-		$a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x,'y'=>$y);
-		if ( $a > 0.95 ) {
-		    next;
-		}
-	    }
-	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
-	    my $color = chr(int((255*$b)>>5)<<1).chr((int((255*$g)>>5)<<5)|(int((255*$r)>>5)<<1));
-	    if ( ( $alpha && defined $a && $a == 1 ) ||
-		 ( $magicPink && $color eq (chr(0x0E).chr(0x0E)) ) ||
-		 ( $magicBlack && $color eq (chr(0x00).chr(0x00)) ) ) {
-		next;
-	    }
-	    #if ( ! exists $colors{$color} ) {
-	    #printf("%4.4X\n",unpack("n",$color));
-	    #}
-	    $colors{$color}++;
+    {
+	my $file = 'scdimgvdppalette_'.$imgFile;
+	if ( $debug ) {
+	    print "Writing $file (original image dithered to quatized colors)\n";
 	}
+	$img->Write($file);
     }
-
-    return sort {$colors{$b} <=> $colors{$a}} keys %colors;
 }
 
 sub Help {
@@ -246,10 +228,9 @@ scdimgvdppalette [options] <imgfiles>
   transparent in the process and typically result in ugly edges.
   Still a work in progress.
 
-[options]
-  -magicpink                 treat #FF00FF as transparent
-  -magicblack                treat #000000 as transparent
-
+'.$palette->GetHelpString().'[options]
+  -resizetotiles             resize the image to a tile boundary
+                             (centered and uses black for pixel fill)
 [dither options]
   -dither=<dither>           set all dithering
   -dithervdp=<dither>        set dithering of palette to VDP colors

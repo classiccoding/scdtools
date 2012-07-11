@@ -335,7 +335,13 @@ sub ReadImgTile {
 	    # process two pixels for a hi and lo nibble
 	    $valueHi = &GetPaletteIndex($img,$x2,$y2);
 	    $valueLo = &GetPaletteIndex($img,$x2+1,$y2);
-	    $tile .= chr(( $valueHi << 4 ) | $valueLo);
+	    if ( $valueHi > 15 ) {
+		print STDERR "Bad palette index: (".($x+0).",".($y+$subrow).") $valueHi ".$palette->GetColorsCount()."\n";
+	    }
+	    if ( $valueLo > 15 ) {
+		print STDERR "Bad palette index: (".($x+1).",".($y+$subrow).") $valueLo\n";
+	    }
+	    $tile .= chr(( ($valueHi & 0x0F) << 4 ) | ($valueLo & 0x0F));
 	}
     }
     # TODO for 2 byte map entries, allow tile flips?
