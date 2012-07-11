@@ -71,6 +71,9 @@ foreach my $arg (@ARGV) {
 	$cinepakBaseRate = $1;
     } elsif ( $arg =~ /^-frameduration=(.+)$/i ) {
 	$cinepakFrameDuration = $1;
+    } elsif ( $arg =~ /^-fps=(.+)$/i ) {
+	my $fps = $1;
+	$cinepakFrameDuration = $cinepakBaseRate/$fps*(12500000/384.0*($pcmFD/2048.0))/$pcmDataRate;
     } elsif ( $arg =~ /^-custom=(.+)$/i ) {
         $customEncodingFile = $1;
     } elsif ( $arg =~ /^-pcmfile=(.+)$/i ) {
@@ -166,13 +169,15 @@ if ( $customEncodingFile ne '' ) {
     my @paldatas = sort <${paldatasString}>;
     my @palmaps = sort <${palmapsString}>;
     my @cinepaktiledatas = sort <${cinepaktiledatasString}>;
+    my $paldatasCount = $#paldatas+1;
     my $palmapsCount = $#palmaps+1;
     for ( my $i = 0; $i <= $#cinepaktiledatas; $i++ ) {
 	if ( $singlePalette ) {
 	    &AddImgFrame($cinepakFrameDuration,$singlePalette,'',$cinepaktiledatas[$i]);
 	} else {
-	    my $palmap = $i < $palmapsCount ? $palmaps[$i] : '';
-	    &AddImgFrame($cinepakFrameDuration,$paldatas[$i],$palmap,$cinepaktiledatas[$i]);
+	    my $paldata = $i < $paldatasCount ? $paldatas[$i] : '';
+	    my $palmap  = $i < $palmapsCount  ? $palmaps[$i]  : '';
+	    &AddImgFrame($cinepakFrameDuration,$paldata,$palmap,$cinepaktiledatas[$i]);
 	}
     }
 }
@@ -219,6 +224,13 @@ sub AddImgFrame {
     # TODO option for debug info for custom?
     if ( 0 ) {
 	print STDERR "AddImgFrame($imgDuration,$imgPalette,$imgPaletteMap,$imgMap)\n";
+    }
+    # in case of single palette or missing palettes, keep using last palette
+    if ( $imgPalette eq '' ) {
+	$imgPalette = $imgPaletteLast;
+    }
+    if ( $imgPalette eq '' ) {
+	die "Cannot handle unspecified palette\n";
     }
     $imgDuration *= $pcmFD / 0x0400;
     while ( $pcmFrameIndex < $pcmFrameCount &&
