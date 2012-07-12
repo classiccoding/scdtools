@@ -422,6 +422,11 @@ sub OutputAll {
     for ( my $i = 0; $i < $outputAllOrderLength; $i++ ) {
 	my $outputType = substr($outputAllOrder,$i,1);
 	# pass zero to indicate assembly output data
+	# TODO put this in somehow for plane without map
+	# if ( $labels ) {
+	#     $fileContents .= "${label}TileWidth: equ ${w}\n";
+	#     $fileContents .= "${label}TileHeight: equ ${h}\n";
+	# }
 	if ( $outputType eq 'p' ) {
 	    $fileContents .= $palette->GetOutputPaletteData(0);
 	} elsif ( $outputType eq 't' ) {
