@@ -35,6 +35,7 @@ sub GetHelpString {
   -palcount=<#>         specifies the number of palettes in use
   -magicpink            treat #FF00FF as transparent
   -magicblack           treat #000000 as transparent
+  -colorzeronormal      treat color zero of each palette as a normal pixel
 ';
 }
 
@@ -45,7 +46,9 @@ sub new {
  
    $self->{'colors'} = [];
    $self->{'colorsCount'} = 0;
+   $self->{'colorsCountRead'} = 0;
    $self->{'colorsMissing'} = {};
+   $self->{'colorsPerPalette'} = 15;
    $self->{'paletteCount'} = 1;
    $self->{'paletteFileOutputAsm'} = '';
    $self->{'paletteFileOutputBin'} = '';
@@ -61,17 +64,35 @@ sub new {
    return $self;
 }
 
+sub Reset {
+    my ($self) = @_;
+    $self->SetMaxColorCount($self->{'colorsCountRead'});
+}
+
 sub SetMaxColorCount {
     my ($self,$count) = @_;
     if ( $self->{'colorsCount'} > $count ) {
 	splice(@{$self->{'colors'}},$count);
 	$self->{'colorsCount'} = $count;
+	if ( $count < $self->{'colorsCountRead'} ) {
+	    $self->{'colorsCountRead'} = $count;
+	}
     }
+}
+
+sub GetColorsCountRead {
+    my ($self) = @_;
+    return $self->{'colorsCountRead'};
 }
 
 sub GetColorsCount {
     my ($self) = @_;
     return $self->{'colorsCount'};
+}
+
+sub GetColorsPerPalette {
+    my ($self) = @_;
+    return $self->{'colorsPerPalette'};
 }
 
 sub SetPaletteCount {
@@ -99,6 +120,8 @@ sub ParseArg {
 	$self->{'magicPink'} = 1;
     } elsif ( $arg =~ /^-magicblack$/i ) {
 	$self->{'magicBlack'} = 1;
+    } elsif ( $arg =~ /^-colorzeronormal$/i ) {
+	$self->{'colorsPerPalette'} = 16;
     } else {
 	if ( $arg =~ /^-nocomments$/i ) {
 	    $self->{'comments'} = 0;
@@ -135,7 +158,8 @@ sub ReadPalette {
     }
 
     if ( $self->{'paletteCount'} <= 0 ) {
-	$self->{'paletteCount'} = ( ( -s $paletteFileInput ) - $self->{'paletteFileInputOffset'} ) >> 5;
+	# allow partial palette to count as a whole palette
+	$self->{'paletteCount'} = ( ( -s $paletteFileInput ) - $self->{'paletteFileInputOffset'} + 31 ) >> 5;
     }
 
     my $paletteCountInBytes = 32 * $self->{'paletteCount'};
@@ -144,13 +168,13 @@ sub ReadPalette {
     open( PALETTE, $paletteFileInput ) or die "Cannot read palette file: $!\n";
     binmode PALETTE;
     seek(PALETTE,$self->{'paletteFileInputOffset'},0);
-    my $paletteDataBuffer;
-    if ( read(PALETTE,$paletteDataBuffer,$paletteCountInBytes) == $paletteCountInBytes ) {
-	$paletteData = $paletteDataBuffer;
-	for ( my $paletteDataByte = 0; $paletteDataByte < $paletteCountInBytes;$paletteDataByte += 2 ) {
-	    if ( $paletteDataByte % 32 > 0 ) {
-		$self->AddColor(substr($paletteData,$paletteDataByte,2));
-	    }
+    my $paletteReadCountInBytes = read(PALETTE,$paletteData,$paletteCountInBytes);
+    # for a partial palette, do not add empty colors
+    # will add these on output
+    for ( my $paletteDataByte = 0; $paletteDataByte < $paletteReadCountInBytes; $paletteDataByte += 2 ) {
+	# may add color zero of each palette depending on -colorzeronormal
+	if ( ( ( $paletteDataByte >> 1 ) & 0xF ) >= 16 - $self->{'colorsPerPalette'} ) {
+	    $self->AddColor(substr($paletteData,$paletteDataByte,2));
 	}
     }
     close PALETTE;
@@ -158,6 +182,8 @@ sub ReadPalette {
     if ( $tmpFileRemove ) {
 	unlink $tmpFile;
     }
+
+    $self->{'colorsCountRead'} = $self->{'colorsCount'};
 }
 
 sub OutputPalette {
@@ -195,13 +221,15 @@ sub GetOutputPaletteData {
 	}
     }
     for ( my $paletteIndex = 0; $paletteIndex < $self->{'paletteCount'}; $paletteIndex++ ) {
- 	if ( $bin ) {
- 	    $fileContents .= pack("n",0x0000);
- 	} else {   
-	    $fileContents .= " dc.w \$0000\n";
+	for ( my $i = 0; $i < (16-$self->{'colorsPerPalette'}); $i++ ) {
+	    if ( $bin ) {
+		$fileContents .= pack("n",0x0000);
+	    } else {   
+		$fileContents .= " dc.w \$0000\n";
+	    }
 	}
-	for ( my $i = 0; $i < 15; $i++ ) {
-	    my $colorsIndex = $paletteIndex * 15 + $i;
+	for ( my $i = 0; $i < $self->{'colorsPerPalette'}; $i++ ) {
+	    my $colorsIndex = $paletteIndex * $self->{'colorsPerPalette'} + $i;
 	    if ( $colorsIndex < $self->{'colorsCount'} ) {
 		if ( $bin ) {
 		    $fileContents .= $self->{'colors'}[$colorsIndex];
@@ -246,7 +274,7 @@ sub GetColorIndexWithNoAdding {
     for ( my $colorsIndex = 0; $colorsIndex < $colorsCount; $colorsIndex++ ) {
 	if ( $color eq $self->{'colors'}[$colorsIndex] ) {
 	    # account for each palette having unused transparent index
-	    $index = $colorsIndex + int($colorsIndex / 15) + 1;
+	    $index = ( $colorsIndex % $self->{'colorsPerPalette'} ) + 16 * int($colorsIndex / $self->{'colorsPerPalette'}) + (16-$self->{'colorsPerPalette'});
 	    last;
 	}
     }
@@ -256,9 +284,10 @@ sub GetColorIndexWithNoAdding {
 sub AddColor {
     my ($self,$color) = @_;
     my $index = -1;
-    if ( $self->{'colorsCount'} < 15 * $self->{'paletteCount'} ) {
+    if ( $self->{'colorsCount'} < $self->{'colorsPerPalette'} * $self->{'paletteCount'} ) {
 	push @{$self->{'colors'}}, $color;
-	$index = $self->{'colorsCount'} + int($self->{'colorsCount'} / 15) + 1;
+	my $colorsIndex = $self->{'colorsCount'};
+	$index = ( $colorsIndex % $self->{'colorsPerPalette'} ) + 16 * int($colorsIndex / $self->{'colorsPerPalette'}) + (16-$self->{'colorsPerPalette'});
 	$self->{'colorsCount'}++;
 	# debug print
 	# printf("Adding color $index : \$%4.4X\n",unpack("n",$color));
@@ -277,6 +306,9 @@ sub AddColorsFromImageMagickImage {
     my $height = $img->Get('height');
     my $alpha = $img->Get('matte');
 
+    # used to keep track of frequency of colors
+    my %colors;
+
     for ( my $y = 0; $y < $height; $y++ ) {
 	for ( my $x = 0; $x < $width; $x++ ) {
 	    my $a = 0;
@@ -289,8 +321,17 @@ sub AddColorsFromImageMagickImage {
 	    }
 	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
 	    my $color = &SCDTools::Palette::ConvertRGBNormalizedToVDPColor($r,$g,$b);
-	    $self->GetColorIndex($color);
+	    if ( exists $colors{$color} ) {
+		$colors{$color}++;
+	    } else {
+		$colors{$color} = 1;
+	    }
 	}
+    }
+
+    # add colors in order of most used to least used
+    foreach my $color ( sort { $colors{$b} <=> $colors{$a} || $a cmp $b } keys %colors ) {
+	$self->GetColorIndex($color);
     }
 }
 

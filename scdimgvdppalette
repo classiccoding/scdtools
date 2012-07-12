@@ -39,8 +39,6 @@ if ( $#ARGV < 0 ) {
 
 my $verbosity = 2;
 
-my $colorCountMax = 15;
-
 my @imgFiles;
 
 my $resizeWidth = 0;
@@ -80,12 +78,9 @@ foreach my $arg (@ARGV) {
 }
 
 $palette->ReadPalette();
-my $useColors = ( $palette->GetColorsCount() > 0 ? 1 : 0 );
+$palette->SetPaletteCount(512/15);
 
-if ( ! $useColors ) {
-    # if not using palette allow lots of palettes for color overflow
-    $palette->SetPaletteCount(512/16);
-}
+my $colorCountMax = $palette->GetColorsPerPalette();
 
 foreach my $imgFile (@imgFiles) {
     &ImgExtractColors($imgFile);
@@ -122,10 +117,11 @@ sub ImgExtractColors($) {
 
     my $img = $imgOriginal->Clone();
 
-    if ( ! $useColors ) {
-	# reset back to zero colors
-	$palette->SetMaxColorCount(0);
-
+    if ( $palette->GetColorsCountRead() >= $colorCountMax ) {
+	# palette read in already too big, make sure to remove extra colors
+	$palette->SetMaxColorCount($colorCountMax);
+    } else {
+	$palette->Reset();
 	$palette->AddColorsFromImageMagickImage($img);
     }
 
@@ -177,24 +173,19 @@ sub ImgExtractColors($) {
 	    $img->Write($file);
 	}
 
-	if ( ! $useColors ) {
-	    # reset back to zero colors
-	    $palette->SetMaxColorCount(0);
+	$palette->Reset();
+	$palette->AddColorsFromImageMagickImage($img);
+	$colorsLength = $palette->GetColorsCount();
 
-	    $palette->AddColorsFromImageMagickImage($img);
-	    $colorsLength = $palette->GetColorsCount();
+	# quantization got less than desired amount of colors
+	# add in the most used ones that are missing
+	if ( $colorsLength < $colorCountMax ) {
+	    # add in all the colors then trim to desired amount of colors
+	    $palette->AddColorsFromImageMagickImage($imgOriginal);
+	    $palette->SetMaxColorCount($colorCountMax);
 	}
 
-	# TODO needed?
-	# if ( $colorsLength < $colorCountMax ) {
-	#     if ( $magicPink ) {
-	# 	$palette->GetColorIndex(chr(0x0E).chr(0x0E));
-	#     } elsif ( $magicBlack ) {
-	# 	$palette->GetColorIndex(chr(0x00).chr(0x00));
-	#     }
-	# }
-
-	# $colorsLength = $palette->GetColorsCount();
+	$colorsLength = $palette->GetColorsCount();
 
 	if ( $colorsLength > $colorCountMax ) {
 	    print STDERR "Quantization went beyond color count\n";
@@ -215,7 +206,7 @@ sub ImgExtractColors($) {
 	}
 
 	$img = $imgOriginal->Clone();
-    } elsif ( ! $useColors ) {
+    } else {
 	print "Image only has $colorsLength VDP colors\n";
     }
 
@@ -225,7 +216,7 @@ sub ImgExtractColors($) {
 	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Riemersma');
     } elsif ( $ditherFinal eq 'fs' ) {
 	$img->Remap('image'=>$imgPalette,dither=>'true','dither-method'=>'Floyd-Steinberg');
-    } elsif ( ! $useColors ) {
+    } else {
 	die "Bad dither final: $ditherFinal\n";
     }
 
