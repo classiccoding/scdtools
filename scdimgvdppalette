@@ -57,6 +57,8 @@ foreach my $arg (@ARGV) {
 	$resizeHeight = $2;
     } elsif ( $arg =~ /^-resizetotiles?$/i ) {
 	$resizeToTiles = 1;
+    } elsif ( $arg =~ /^-resizetoeventiles?$/i ) {
+	$resizeToTiles = 2;
     } elsif ( $arg =~ /^-dither=(none|r|fs)$/i ) {
 	$ditherVdp = lc($1);
 	$ditherQuantize = lc($1);
@@ -105,13 +107,16 @@ sub ImgExtractColors($) {
     if ( $resizeWidth && $resizeHeight ) {
 	# possible filters: Point, Box, Triangle, Hermite, Hanning, Hamming, Blackman, Gaussian, Quadratic, Cubic, Catrom, Mitchell, Lanczos, Bessel, Sinc
 	$imgOriginal->Resize('width'=>$resizeWidth,'height'=>$resizeHeight,'filter'=>'Cubic');
-    } elsif ( $resizeToTiles ) {
+    }
+
+    if ( $resizeToTiles ) {
 	my $width = $imgOriginal->Get('width');
 	my $height = $imgOriginal->Get('height');
-	if ( $width % 8 != 0 || $height % 8 != 0 ) {
-	    my $widthNew = ($width+7) & 0xFFF8;
-	    my $heightNew = ($height+7) & 0xFFF8;
-	    $imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>(($widthNew-$width)>>1),'y'=>(($heightNew-$heightNew)>>1),'background'=>'rgb(0,0,0)');
+	my $boundary = $resizeToTiles*8;
+	if ( $width % $boundary != 0 || $height % $boundary != 0 ) {
+	    my $widthNew = int(($width+$boundary-1)/$boundary) * $boundary;
+	    my $heightNew = int(($height+$boundary-1)/$boundary) * $boundary;
+	    $imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>(($widthNew-$width)>>1),'y'=>(($heightNew-$height)>>1),'background'=>'rgb(0,0,0)');
 	}
     }
 
@@ -206,7 +211,7 @@ sub ImgExtractColors($) {
 	}
 
 	$img = $imgOriginal->Clone();
-    } else {
+    } elsif ( $palette->GetColorsCountRead() != $palette->GetColorsCount() ) {
 	print "Image only has $colorsLength VDP colors\n";
     }
 
@@ -242,6 +247,8 @@ scdimgvdppalette [options] <imgfiles>
 '.$palette->GetHelpString().'[options]
   -resize=<x>x<y>            resize to a specific size
   -resizetotiles             resize the image to a tile boundary
+                             (centered and uses black for pixel fill)
+  -resizetoeventiles         resize the image to an even tile boundary
                              (centered and uses black for pixel fill)
 
 [dither options]
