@@ -22,11 +22,34 @@ use warnings;
 
 use POSIX qw(SEEK_SET);
 
-if ( $#ARGV != 0 ) {
-    &Help();
+my $verbosity = 2;
+my $ipFile = 'IP.BIN';
+my $spFile = 'SP.BIN';
+my $iso = '';
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } elsif ( $arg =~ m/^-ipfile=(.+)$/i ) {
+	$ipFile = $1;
+    } elsif ( $arg =~ m/^-spfile=(.+)$/i ) {
+	$spFile = $1;
+    } elsif ( $arg =~ m/^-iponly/i ) {
+	$spFile = '';
+    } elsif ( $arg =~ m/^-sponly/i ) {
+	$ipFile = '';
+    } elsif ( $iso eq '' && -e $arg ) {
+	$iso = $arg;
+    } else {
+	print "Bad argument: $arg\n";
+	&Help();
+    }
 }
 
-my $iso = $ARGV[0];
+if ( $iso eq '' ||
+     ( $ipFile eq '' && $spFile eq '' ) ) {
+    &Help();
+}
 
 if (!open(ISO, $iso)) {
     die "Could not open ISO: $iso\n";
@@ -53,19 +76,21 @@ my $spData = &ReadString($spStart,$spSize);
 close ISO;
 
 # now just make the IP.BIN and SP.BIN from the data extracted
-&OutputFileFromArea('IP.BIN',$ipStart,$ipSize,$ipData);
-&OutputFileFromArea('SP.BIN',$spStart,$spSize,$spData);
+&OutputFileFromArea($ipFile,$ipStart,$ipSize,$ipData);
+&OutputFileFromArea($spFile,$spStart,$spSize,$spData);
 
 
 
 sub OutputFileFromArea {
     my ($file,$offset,$size,$data) = @_;
-    printf("Making %s from ISO offset \$%8.8X with size \$%8.8X\n",$file,$offset,$size);
-    if ( ! open(OUTPUT,'>'.$file) ) {
-	die "Can write file: $file\n";
+    if ( $file ne '' ) {
+	printf("Making %s from ISO offset \$%8.8X with size \$%8.8X\n",$file,$offset,$size);
+	if ( ! open(OUTPUT,'>'.$file) ) {
+	    die "Can write file: $file\n";
+	}
+	print OUTPUT $data;
+	close OUTPUT;
     }
-    print OUTPUT $data;
-    close OUTPUT;
 }
 
 sub ReadString {
@@ -114,7 +139,13 @@ sub Help {
 scdextractipsp <iso>
 
 [description]
-  Extracts IP.BIN and SP.BIN from a Sega CD ISO.  
+  Extracts IP data and SP data from a Sega CD ISO.  
+
+[options]
+  -ipfile=<file>  Specifies name of file to write IP data (defaults IP.BIN)
+  -spfile=<file>  Specifies name of file to write SP data (defaults SP.BIN)
+  -iponly         Only extract IP data
+  -sponly         Only extract SP data
 
 ';
 }
