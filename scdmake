@@ -89,9 +89,9 @@ my $scdvolumetype = 0x0001;          # not in config by default
 my $scdsystemname;
 my $scdsystemversion;
 my $scdipstart = 0x00000800;
-my $scdipend;                        # not in config by default
+my $scdipsize;                        # not in config by default
 my $scdspstart;                      # not in config by default
-my $scdspend;                        # not in config by default
+my $scdspsize;                        # not in config by default
 
 # sega cd: ids for disc id
 my $scdhardware;                     # not in config by default
@@ -466,7 +466,7 @@ if ( $spassemble ) {
     system("scdasm -v=$verbosity $spasm $spbin $splst");
 }
 
-if ( ! defined $scdipend ) {
+if ( ! defined $scdipsize ) {
     # some of IP.BIN will be put in 0x200-0x800
     my $ipbinSize = -e $ipbin ? -s $ipbin : 0;
     my $sizeBytes = $ipbinSize - ($sectorSize - $scdiprealstart);
@@ -474,10 +474,10 @@ if ( ! defined $scdipend ) {
 	print STDERR "Sega CD development guide says somewhere around 24K gets in trouble\n";
     }
     my $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
-    $scdipend = $sizeSectors * $sectorSize;
+    $scdipsize = $sizeSectors * $sectorSize;
 }
 
-if ( ! defined $scdspend ) {
+if ( ! defined $scdspsize ) {
     my $sizeBytes = -e $spbin ? -s $spbin : 0;
     if ( $sizeBytes < $sectorSize ) {
 	$sizeBytes = $sectorSize;
@@ -486,14 +486,14 @@ if ( ! defined $scdspend ) {
 	print STDERR "Sega CD development guide says somewhere around 24K gets in trouble\n";
     }
     my $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
-    $scdspend = $sizeSectors * $sectorSize;
+    $scdspsize = $sizeSectors * $sectorSize;
 }
 
 if ( ! defined $scdspstart ) {
-    if ( $scdipstart + $scdipend + $scdspend > 16 * $sectorSize ) {
+    if ( $scdipstart + $scdipsize + $scdspsize > 16 * $sectorSize ) {
 	die "Could not fit both IP and SP in first 16 sectors, (you can change some variables in SCDMAKE.CFG to do this)\n";
     }
-    $scdspstart = $scdipstart + $scdipend;
+    $scdspstart = $scdipstart + $scdipsize;
 }
 
 # all modified files should be done now, safe to place all the remaining files
@@ -799,12 +799,12 @@ sub PrintSegaCDSystemID {
     &PrintToIso(chr(0x00)x2);
     # set 16 bytes for IP information
     &PrintBigEndianQuadByteToIso($scdipstart);
-    &PrintBigEndianQuadByteToIso($scdipend);
+    &PrintBigEndianQuadByteToIso($scdipsize);
     &PrintBigEndianQuadByteToIso(0x00000000);
     &PrintBigEndianQuadByteToIso(0x00000000);
     # set 16 bytes for SP information
     &PrintBigEndianQuadByteToIso($scdspstart);
-    &PrintBigEndianQuadByteToIso($scdspend);
+    &PrintBigEndianQuadByteToIso($scdspsize);
     &PrintBigEndianQuadByteToIso(0x00000000);
     &PrintBigEndianQuadByteToIso(0x00000000);
     # set 0xB0 bytes to space
