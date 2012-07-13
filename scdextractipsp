@@ -1,0 +1,120 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2011 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+use strict;
+use warnings;
+
+use POSIX qw(SEEK_SET);
+
+if ( $#ARGV != 0 ) {
+    &Help();
+}
+
+my $iso = $ARGV[0];
+
+if (!open(ISO, $iso)) {
+    die "Could not open ISO: $iso\n";
+}
+
+binmode ISO;
+
+# read values from System ID
+my $ipSizeID = &ReadLong(0x34);
+my $spStart  = &ReadLong(0x40);
+my $spSize   = &ReadLong(0x44);
+
+# determine proprietary code size since affects IP start and size
+my $propSize = &DetermineProprietarySize();
+
+# determine IP start and size accounting for proprietary code
+my $ipStart  = 0x200+$propSize;
+my $ipSize   = (0x600-$propSize) + $ipSizeID;
+
+# read the IP and SP data
+my $ipData = &ReadString($ipStart,$ipSize);
+my $spData = &ReadString($spStart,$spSize);
+
+close ISO;
+
+# now just make the IP.BIN and SP.BIN from the data extracted
+&OutputFileFromArea('IP.BIN',$ipStart,$ipSize,$ipData);
+&OutputFileFromArea('SP.BIN',$spStart,$spSize,$spData);
+
+
+
+sub OutputFileFromArea {
+    my ($file,$offset,$size,$data) = @_;
+    printf("Making %s from ISO offset \$%8.8X with size \$%8.8X\n",$file,$offset,$size);
+    if ( ! open(OUTPUT,'>'.$file) ) {
+	die "Can write file: $file\n";
+    }
+    print OUTPUT $data;
+    close OUTPUT;
+}
+
+sub ReadString {
+    my ($offset,$size) = @_;
+    seek(ISO,$offset,SEEK_SET);
+    my $data = chr(0x00)x$size;
+    if ( read(ISO,$data,$size) != $size ) {
+	die "Could not read ISO data\n";
+    }
+    return $data;
+}
+
+sub ReadLong {
+    my $data = &ReadString($_[0],4);
+    return unpack("N",$data);
+}
+
+sub ReadByte {
+    my $data = &ReadString($_[0],1);
+    return ord($data);
+}
+
+sub DetermineProprietarySize {
+    # determine proprietary code size by examining the contents of it
+    # the first different byte between all three regions is 0x20B
+    # 0x7A (U)
+    # 0xA1 (J)
+    # 0x64 (E)
+    my $data = &ReadByte(0x20B);
+    my $size = 0;
+    if ( $data == 0x7A ) {
+	$size = 0x584;
+    } elsif ( $data == 0xA1 ) {
+	$size = 0x156;
+    } elsif ( $data == 0x64 ) {
+	$size = 0x56E;
+    } else {
+	die "Could not determine region of ISO\n";
+    }
+}
+
+
+
+sub Help {
+    die '
+scdextractipsp <iso>
+
+[description]
+  Extracts IP.BIN and SP.BIN from a Sega CD ISO.  
+
+';
+}
