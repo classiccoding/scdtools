@@ -36,6 +36,7 @@ sub GetHelpString {
   -magicpink            treat #FF00FF as transparent
   -magicblack           treat #000000 as transparent
   -colorzeronormal      treat color zero of each palette as a normal pixel
+  -addcolor=BGR         add VDP hex color to palette
 ';
 }
 
@@ -122,6 +123,10 @@ sub ParseArg {
 	$self->{'magicBlack'} = 1;
     } elsif ( $arg =~ /^-colorzeronormal$/i ) {
 	$self->{'colorsPerPalette'} = 16;
+    } elsif ( $arg =~ /^-addcolor=([02468ACE]{3})$/i ) {
+	my $colorString = $1;
+	my $color = chr(hex(substr($colorString,0,1))).chr((hex(substr($colorString,1,1))<<4)|(hex(substr($colorString,2,1))));
+	$self->AddColor($color);
     } else {
 	if ( $arg =~ /^-nocomments$/i ) {
 	    $self->{'comments'} = 0;
