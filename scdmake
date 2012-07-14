@@ -157,6 +157,7 @@ my $ipassemble = 1;                  # not in config by default
 my $spassemble = 1;                  # not in config by default
 
 # if desire a specific ISO file layout
+# can use a file with .isoinfo suffix as static output of "isoinfo -l -i <iso>"
 my $isoMatch = '';                   # not in config by default
 my $isoMatchFileExtent = -1;         # not in config by default
 
@@ -305,12 +306,6 @@ my $spasm = $spprefix .'.ASM';
 my $splst = $spprefix .'.LST';
 my $spbin = $spprefix .'.BIN';
 
-# make a copy of these tools to put on the SCD with the source (hopefully)
-if ( $isoPublicDefault > 1 ) {
-    # now that public, could just point to a revision of scdtools
-    # system("scdback");
-}
-
 # assemble the IP
 # cannot assemble the SP yet since want to make SCDMAKE.INC first
 if ( $ipassemble ) {
@@ -319,13 +314,18 @@ if ( $ipassemble ) {
 
 sub Touch {
     foreach my $file (@_) {
-	# TODO platform specific command
-	system("touch $file");
+	if ( ! -e $file ) {
+	    # make an empty file
+	    open(FILE, '>'.$file);
+	    close FILE;
+	}
     }
 }
 
 # this ensures the path tables and extents size can be precisely determined
-&Touch($splst,$spbin);
+if ( $spassemble ) {
+    &Touch($splst,$spbin);
+}
 if ( $#scdmakeinc >= 0 ) {
     &Touch($inc);
 }
@@ -333,8 +333,7 @@ if ( $#scdmakeinc >= 0 ) {
 # remove temporary files and such
 foreach my $file (@tmpFilesToRemove) {
     if ( -e $file ) {
-	# TODO platform
-	system("rm $file");
+	unlink($file);
     }
 }
 
@@ -1188,11 +1187,18 @@ sub DetermineFileInformationForIso {
 	$dirs{$dir}{'public'} = $isoPublicDefault;
 
 	if ( $isoMatchFileExtent < 0 ) {
-	    die "Need to specify $isoMatchFileExtent\n";
+	    die "Need to specify \$isoMatchFileExtent\n";
 	}
-	my $cmd = "isoinfo -l -i $isoMatch";
-	print "$cmd\n";
-	open( PIPE, "$cmd |" ) or die "Could not pipe command: $cmd\n";
+
+	# allow output of isoinfo to be used
+	my $pipe;
+	if ( $isoMatch =~ m/\.isoinfo$/ ) {
+	    $pipe = $isoMatch;
+	} else {
+	    $pipe = "isoinfo -l -i $isoMatch |";
+	}
+
+	open( PIPE, $pipe ) or die "Could not pipe file/command: $pipe\n";
 	while ( my $line = <PIPE> ) {
 	    # TODO doesn't support subdirectories
 	    # supports iso level 1 (8.3 filename) and lowercase
