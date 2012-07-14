@@ -56,6 +56,7 @@ my $isoBufferLength = 0;
 # 0: none, 1: some, 2: most
 my $verbosity = 2;                   # not in config by default
 my $verbositySet = 0;                # not in condig by default
+my $verbositySetCommandLine = 0;     # not in condig by default
 # config should use &SetVerbosityIfNotAlreadySet(<value>);
 
 # a value different than 0x800 (2048) has never been tested or desired
@@ -104,6 +105,7 @@ my $scdproductversion;
 my $scdio;
 my $scdmodem;
 my $scdcountry;                      # not in config by default
+my $scdcountryAllRequiresFullRebuild = 0;
 
 my $scdiprealstart = 0x200 + 1412;
 
@@ -149,6 +151,7 @@ my $fillUnusedFileWithZero = 0;      # not in config by default
 my $ipprefix;
 my $spprefix;
 my $outprefix;
+my $outprefixsuffix = '';
 
 # ippad=0 will put the SP in the same place as if ippad=1
 # so the SP will not be efficiently placed
@@ -175,6 +178,9 @@ my @isoHiddenFiles;                  # not in config by default
 my @isoPublicFiles;                  # not in config by default
 
 my @tmpFilesToRemove;                # not in config by default
+
+# specify a YYYYHHMMDDHHMMSS00 to set the date used for everything
+my $date = '';                       # not in config by default
 
 my $defaults = '# scdmake configuration
 $scddiscid                = \'SEGADISCSYSTEM\';
@@ -220,6 +226,7 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
 	$verbosity = $1;
 	$verbositySet++;
+	$verbositySetCommandLine++;
     } elsif ( $arg eq '-make' ) {
 	if ( -e $cfg ) {
 	    print STDERR "Will not override existing $cfg\n";
@@ -231,6 +238,11 @@ foreach my $arg (@ARGV) {
 	    close CFG;
 	}
 	exit;
+    } elsif ( $arg =~ m/^-date=(.+)$/i ) {
+	$date = $1;
+    } elsif ( $arg =~ m/^-outprefixsuffix=(_US|_JP|_EU)$/i ) {
+	# hidden option intended for -country=all which requires rebuilding
+	$outprefixsuffix = $1;
     } else {
 	print "Bad argument: $arg\n";
 	&Help();
@@ -250,6 +262,42 @@ if ( -e $cfg ) {
 } else {
     print "Run \"scdmake -make\" to make a default SCDMAKE.CFG file\n";
     &Help();
+}
+
+# PVD date format
+# TODO get date in perl...
+if ( $date eq '' ) {
+    chomp($date = (`date -u +%Y%m%d%H%M%S00`)[0]);
+}
+
+# extent entry date format
+if ( $date !~ m/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})00$/ ) {
+    die "Could not parse date: $date\n";
+}
+my $year = $1;
+my $month = $2;
+my $day = $3;
+my $hour = $4;
+my $min = $5;
+my $sec = $6;
+my $dateExtent = chr($year-1900).chr($month).chr($day).chr($hour).chr($min).chr($sec).chr(0x00);
+
+# rebuild full should not build anything, directly start into calling scdmake
+# recursively for each country
+if ( $scdcountryAllRequiresFullRebuild ) {
+    # pass date so they all have the same date
+    my $args = " -date=$date ";
+    # pass verbosity if passed on command line
+    if ( $verbositySetCommandLine ) {
+	$args .= " -v=$verbosity ";
+    }
+    print "Calling scdmake -country=U ...\n";
+    system("scdmake -country=U -outprefixsuffix=_US $args");
+    print "Calling scdmake -country=J ...\n";
+    system("scdmake -country=J -outprefixsuffix=_JP $args");
+    print "Calling scdmake -country=E ...\n";
+    system("scdmake -country=E -outprefixsuffix=_EU $args");
+    exit;
 }
 
 if ( $joliet ) {
@@ -282,22 +330,6 @@ if ( $joliet ) {
     }
 }
 
-# PVD date format
-# TODO get date in perl...
-chomp(my $date = (`date -u +%Y%m%d%H%M%S00`)[0]);
-
-# extent entry date format
-if ( $date !~ m/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})00$/ ) {
-    die "Could not parse date: $date\n";
-}
-my $year = $1;
-my $month = $2;
-my $day = $3;
-my $hour = $4;
-my $min = $5;
-my $sec = $6;
-my $dateExtent = chr($year-1900).chr($month).chr($day).chr($hour).chr($min).chr($sec).chr(0x00);
-
 # IP/SP filenames
 my $ipasm = $ipprefix .'.ASM';
 my $iplst = $ipprefix .'.LST';
@@ -310,16 +342,6 @@ my $spbin = $spprefix .'.BIN';
 # cannot assemble the SP yet since want to make SCDMAKE.INC first
 if ( $ipassemble ) {
     system("scdasm -v=$verbosity $ipasm $ipbin $iplst");
-}
-
-sub Touch {
-    foreach my $file (@_) {
-	if ( ! -e $file ) {
-	    # make an empty file
-	    open(FILE, '>'.$file);
-	    close FILE;
-	}
-    }
 }
 
 # this ensures the path tables and extents size can be precisely determined
@@ -542,7 +564,7 @@ if ( lc($scdcountry) eq 'all' ) {
     $scdcountry = 'E';
     &MakeISO($outprefix.'_EU.'.$isoSuffix);
 } else {
-    &MakeISO($outprefix.'.'.$isoSuffix);
+    &MakeISO($outprefix.$outprefixsuffix.'.'.$isoSuffix);
 }
 
 ###############################################################################
@@ -2052,19 +2074,37 @@ sub SetCountryIfNotAlreadySet {
     }
 }
 
+sub Touch {
+    foreach my $file (@_) {
+	if ( ! -e $file ) {
+	    # make an empty file
+	    open(FILE, '>'.$file);
+	    close FILE;
+	}
+    }
+}
+
 sub MakeFPSInc {
-    my $fps = 60;
+    &CheckForRebuildAll();
+    my $fps = '60';
     if ( $scdcountry =~ m/[UJ]/i ) {
-	$fps = 60;
+	$fps = '60';
     } elsif ( $scdcountry =~ m/[E]/i ) {
-	$fps = 50;
+	$fps = '50';
     } else {
 	die "Cannot determine frame per second based on $scdcountry\n";
     }
     if ( open(FPSINC, ">FPS.INC") ) {
-	print FPSINC "FramesPerSecond: equ 60\n";
+	print FPSINC "FramesPerSecond: equ $fps\n";
     }
     close FPSINC;
+}
+
+sub CheckForRebuildAll {
+    if ( lc($scdcountry) eq 'all' ) {
+	$scdcountryAllRequiresFullRebuild = 1;
+	die "Need to rebuild all\n";
+    }
 }
 
 sub Help {
@@ -2075,9 +2115,11 @@ scdmake [options]
   Generate a Sega CD ISO.  
 
 [options]
-  -make               generate a default SCDMAKE.CFG file
-  -country=<country>  specify U, J, E, or all
-  -v=<#>              specify verbosity level
+  -make                     generate a default SCDMAKE.CFG file
+  -country=<country>        specify U, J, E, or all
+  -v=<#>                    specify verbosity level
+  -date=<YYYYMMDDHHMMSS00>  specify the date to use in ISO
+                            (defaults current date)
 
 ';
 }
