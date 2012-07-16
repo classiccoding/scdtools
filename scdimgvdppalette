@@ -16,12 +16,10 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 ###############################################################################
-# convert images to asm files for megadrive/megacd development
+# convert images to VDP friendly images for megadrive/megacd development
 ###############################################################################
 
-# TODO ability to change imgLabel?
 # TODO more verbosity...
-# TODO reduce size to 320x240 if larger (scaling)
 
 use strict;
 use warnings;
@@ -47,6 +45,9 @@ my $resizeToTiles = 0;
 my $ditherVdp = 'fs';
 my $ditherQuantize = 'fs';
 my $ditherFinal = 'fs';
+# recommended to be log2(colors), and going bigger to 8 doesn't seem to effect
+# final image but drastically lengthen the time to run
+my $treedepth = 4;
 my $debug = 0;
 
 foreach my $arg (@ARGV) {
@@ -95,10 +96,6 @@ foreach my $imgFile (@imgFiles) {
 
 sub ImgExtractColors($) {
     my ($imgFile) = @_;
-
-    my $imgLabel = $imgFile;
-    $imgLabel =~ s/\..*$//g;
-    $imgLabel =~ s/[^A-Za-z0-9]//g;
 
     my $imgOriginal = Image::Magick->new();
     my $x = $imgOriginal->ReadImage($imgFile);
@@ -163,11 +160,11 @@ sub ImgExtractColors($) {
 	$img = $imgOriginal->Clone();
 
 	if ( $ditherQuantize eq 'none' ) {
-	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'false');
+	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>$treedepth,'dither'=>'false');
 	} elsif ( $ditherQuantize eq 'r' ) {
-	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Riemersma');
+	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>$treedepth,'dither'=>'true','dither-method'=>'Riemersma');
 	} elsif ( $ditherQuantize eq 'fs' ) {
-	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>8,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
+	    $img->Quantize('colors'=>$colorCountMax,'measure_error'=>'true','treedepth'=>$treedepth,'dither'=>'true','dither-method'=>'Floyd-Steinberg');
 	} else {
 	    die "Bad dither final: $ditherQuantize\n";
 	}
