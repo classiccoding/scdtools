@@ -338,13 +338,10 @@ my $spasm = $spprefix .'.ASM';
 my $splst = $spprefix .'.LST';
 my $spbin = $spprefix .'.BIN';
 
-# assemble the IP
-# cannot assemble the SP yet since want to make SCDMAKE.INC first
-if ( $ipassemble ) {
-    system("scdasm -v=$verbosity $ipasm $ipbin $iplst");
-}
-
 # this ensures the path tables and extents size can be precisely determined
+if ( $ipassemble ) {
+    &Touch($iplst,$ipbin);
+}
 if ( $spassemble ) {
     &Touch($splst,$spbin);
 }
@@ -482,7 +479,10 @@ if ( $#scdmakeinc >= 0 ) {
     close SCDMAKEINC;
 }
 
-# now that SCDMAKE.INC made, can assemble SP
+# now that SCDMAKE.INC made, can assemble IP and SP
+if ( $ipassemble ) {
+    system("scdasm -v=$verbosity $ipasm $ipbin $iplst");
+}
 if ( $spassemble ) {
     system("scdasm -v=$verbosity $spasm $spbin $splst");
 }
