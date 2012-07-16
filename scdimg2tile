@@ -400,6 +400,7 @@ sub GetPaletteIndex {
     if ( exists $cacheGetPaletteIndex{$color} ) {
 	$index = $cacheGetPaletteIndex{$color};
     }
+
     if ( $index < 0 ) {
 	$index = $palette->GetColorIndex($color);
     }

@@ -24,6 +24,8 @@ use warnings;
 
 my $tmpFile = 'TMP.BIN';
 my $tmpFileRemoveAfterUse = 1;
+my $constantColorBlack = chr(0x00).chr(0x00);
+my $constantColorPink  = chr(0x0E).chr(0x0E);
 
 sub GetHelpString {
     return '[options-palette]
@@ -257,11 +259,13 @@ sub GetOutputPaletteData {
     return $fileContents;
 }
 
+my %cache;
+
 sub GetColorIndex {
     my ($self,$color) = @_;
     my $index = -1;
-    if ( ( $self->{'magicPink'} && $color eq (chr(0x0E).chr(0x0E)) ) ||
-	 ( $self->{'magicBlack'} && $color eq (chr(0x00).chr(0x00)) ) ) {
+    if ( ( $self->{'magicPink'} && $color eq $constantColorPink ) ||
+	 ( $self->{'magicBlack'} && $color eq $constantColorBlack ) ) {
 	$index = 0;
     } else {
 	$index = $self->GetColorIndexWithNoAdding($color);
@@ -312,7 +316,11 @@ sub AddColorsFromImageMagickImage {
     my $alpha = $img->Get('matte');
 
     # used to keep track of frequency of colors
-    my %colors;
+    my @colors;
+
+    for ( my $i = 0; $i < 8*8*8; $i++ ) {
+	$colors[$i] = 0;
+    }
 
     for ( my $y = 0; $y < $height; $y++ ) {
 	for ( my $x = 0; $x < $width; $x++ ) {
@@ -325,17 +333,18 @@ sub AddColorsFromImageMagickImage {
 		}
 	    }
 	    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
-	    my $color = &SCDTools::Palette::ConvertRGBNormalizedToVDPColor($r,$g,$b);
-	    if ( exists $colors{$color} ) {
-		$colors{$color}++;
-	    } else {
-		$colors{$color} = 1;
-	    }
+	    # 15% performance optimization: use simpler format to store color
+	    my $colorInt = &SCDTools::Palette::ConvertRGBNormalizedToVDPColorInt($r,$g,$b);
+	    $colors[$colorInt]++;
 	}
     }
 
     # add colors in order of most used to least used
-    foreach my $color ( sort { $colors{$b} <=> $colors{$a} || $a cmp $b } keys %colors ) {
+    foreach my $colorInt ( sort { $colors[$b] <=> $colors[$a] || $a <=> $b } (0..8*8*8-1) ) {
+	if ( $colors[$colorInt] == 0 ) {
+	    last;
+	}
+	my $color = &SCDTools::Palette::ConvertVDPColorIntToVDPColor($colorInt);
 	$self->GetColorIndex($color);
     }
 }
@@ -392,6 +401,16 @@ sub Convert {
 	}
 	$self->{'colors'}[$colorsIndex] = $cNew;
     }
+}
+
+sub ConvertRGBNormalizedToVDPColorInt {
+    my ($r,$g,$b) = @_;
+    return (int((255*$b)>>5)<<6)|(int((255*$g)>>5)<<3)|(int((255*$r)>>5));
+}
+
+sub ConvertVDPColorIntToVDPColor {
+    my ($colorInt) = @_;
+    return chr(0x0E & ($colorInt>>5)).chr((0xE0 & ($colorInt<<2))|(0x0E & ($colorInt<<1)));
 }
 
 sub ConvertRGBNormalizedToVDPColor {
