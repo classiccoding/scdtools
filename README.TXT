@@ -14,6 +14,8 @@ scdcinepakencode
   Encode a cinepak file
 scdcinepakencodeframe
   Encode the image data for a cinepak frame
+scdextractipsp
+  Extract IP and SP from an ISO.
 scdget
   Retreive the iso for the Sega CD in your CD-ROM
   Uses dd program
