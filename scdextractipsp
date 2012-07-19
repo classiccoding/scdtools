@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 ###############################################################################
-# Copyright (c) 2011 by bgvanbur
+# Copyright (c) 2012 by bgvanbur
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -17,6 +17,8 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 ###############################################################################
 
+# TODO support bin/cue format?
+
 use strict;
 use warnings;
 
@@ -26,6 +28,7 @@ my $verbosity = 2;
 my $ipFile = 'IP.BIN';
 my $spFile = 'SP.BIN';
 my $iso = '';
+my $removeTrailingZeros = 0;
 
 foreach my $arg (@ARGV) {
     if ( $arg =~ m/^-v=(\d+)$/i ) {
@@ -34,10 +37,12 @@ foreach my $arg (@ARGV) {
 	$ipFile = $1;
     } elsif ( $arg =~ m/^-spfile=(.+)$/i ) {
 	$spFile = $1;
-    } elsif ( $arg =~ m/^-iponly/i ) {
+    } elsif ( $arg =~ m/^-iponly$/i ) {
 	$spFile = '';
-    } elsif ( $arg =~ m/^-sponly/i ) {
+    } elsif ( $arg =~ m/^-sponly$/i ) {
 	$ipFile = '';
+    } elsif ( $arg =~ m/^-removetrailingzeros$/i ) {
+	$removeTrailingZeros = 1;
     } elsif ( $iso eq '' && -e $arg ) {
 	$iso = $arg;
     } else {
@@ -74,6 +79,24 @@ my $ipData = &ReadString($ipStart,$ipSize);
 my $spData = &ReadString($spStart,$spSize);
 
 close ISO;
+
+if ( $removeTrailingZeros ) {
+    $ipData =~ s/\x00+$//;
+    my $ipSizeNew = length($ipData);
+    my $ipSizeDiff = $ipSize - $ipSizeNew;
+    if ( $ipSizeDiff ) {
+	print "removed $ipSizeDiff zero bytes from the end of $ipFile\n";
+	$ipSize = $ipSizeNew;
+    }
+
+    $spData =~ s/\x00+$//;
+    my $spSizeNew = length($spData);
+    my $spSizeDiff = $spSize - $spSizeNew;
+    if ( $spSizeDiff ) {
+	print "removed $spSizeDiff zero bytes from the end of $spFile\n";
+	$spSize = $spSizeNew;
+    }
+}
 
 # now just make the IP.BIN and SP.BIN from the data extracted
 &OutputFileFromArea($ipFile,$ipStart,$ipSize,$ipData);
@@ -142,10 +165,12 @@ scdextractipsp <iso>
   Extracts IP data and SP data from a Sega CD ISO.  
 
 [options]
-  -ipfile=<file>  Specifies name of file to write IP data (defaults IP.BIN)
-  -spfile=<file>  Specifies name of file to write SP data (defaults SP.BIN)
-  -iponly         Only extract IP data
-  -sponly         Only extract SP data
+  -ipfile=<file>        Name of file to write IP data (defaults IP.BIN)
+  -spfile=<file>        Name of file to write SP data (defaults SP.BIN)
+  -iponly               Only extract IP data
+  -sponly               Only extract SP data
+  -removetrailingzeros  remove the trailing zero bytes at the end of IP/SP
+                        most commercial games had an IP/SP that was mostly zero
 
 ';
 }
