@@ -108,8 +108,6 @@ my $scdmodem;
 my $scdcountry;                      # not in config by default
 my $scdcountryAllRequiresFullRebuild = 0;
 
-my $scdiprealstart = 0x200 + 1412;
-
 # ISO 9660: ids for primary volume descriptor (pvd)
 my $pvdsystemid;                     # not in config by default
 my $pvdvolumeid;
@@ -216,6 +214,7 @@ $outprefix                = \'SCD\';
 eval($defaults);
 warn $@ if $@;
 $verbositySet = 0;
+$scdcountry = undef;
 
 my $cfg = 'SCDMAKE.CFG';
 my $inc = 'SCDMAKE.INC';
@@ -491,6 +490,19 @@ if ( $spassemble ) {
 if ( ! defined $scdipsize ) {
     # some of IP.BIN will be put in 0x200-0x800
     my $ipbinSize = -e $ipbin ? -s $ipbin : 0;
+    # default is max size of US version
+    # by padding, makes it easier for people to use scdconv or convscd to
+    # change regions
+    my $scdiprealstart = 0x200 + 1412;
+    if ( ! $ippad &&
+	 lc($scdcountry) ne 'all' &&
+	 $scdcountry !~ m/U/i ) {
+	if ( $scdcountry =~ m/J/i ) {
+	    $scdiprealstart = 0x200 + 342;
+	} elsif ( $scdcountry =~ m/E/i ) {
+	    $scdiprealstart = 0x200 + 1390;
+	}
+    }
     my $sizeBytes = $ipbinSize - ($sectorSize - $scdiprealstart);
     if ( $sizeBytes > 24*1024 ) {
 	print STDERR "Sega CD development guide says somewhere around 24K gets in trouble\n";
@@ -2101,6 +2113,8 @@ sub SetVerbosityIfNotAlreadySet {
 sub SetCountryIfNotAlreadySet {
     if ( ! defined $scdcountry ) {
 	$scdcountry = $_[0];
+    } else {
+	print "SetCountryIfNotAlreadySet $scdcountry\n";
     }
 }
 
