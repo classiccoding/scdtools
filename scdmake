@@ -25,9 +25,10 @@
 #   1) SCD 2) PVD 3) joliet SVD 4) little path table 5) big path table
 #   6) joliet little path table 7) joliet big path table 8) root extent
 #   9) joliet root extent 10) files
-###############################################################################
 # TODO does not optimize duplicated files
 # TODO finish joliet support (only supports 8.3 [A-Za-z0-9] in most places)
+# TODO option to put each file extent in front of files in directory
+#   Jeopardy does this so iso match won't work
 ###############################################################################
 
 use strict;
@@ -503,9 +504,6 @@ if ( ! defined $scdspsize ) {
     if ( $sizeBytes < $sectorSize ) {
 	$sizeBytes = $sectorSize;
     }
-    if ( $scdiprealstart + $sizeBytes > 24*1024 ) {
-	print STDERR "Sega CD development guide says somewhere around 24K gets in trouble\n";
-    }
     my $sizeSectors = &NumberOfSectorsForSize($sizeBytes);
     $scdspsize = $sizeSectors * $sectorSize;
 }
@@ -648,7 +646,7 @@ sub MakeISO {
     &PrintPrimaryVolumeDescriptorToIso();
 
     if ( $verbosity >= 2 ) {
-	print "Sector 16-16: sega cd iso 9660 primvary volume descriptor\n";
+	print "Sector 16-16: sega cd iso 9660 primary volume descriptor\n";
     }
 
     if ( $joliet ) {
@@ -1189,24 +1187,32 @@ sub GetPathTableByteSize {
 
 sub DetermineFileInformationForIso {
     if ( $isoMatch ne '' ) {
+	# add in all the directory information in not used public setting
+	&AddDirInformationForIso('','','',cwd,'',0);
+
+	# all files in ISO should be marked public
+	my $isoPublicDefaultBackup = $isoPublicDefault;
+	$isoPublicDefault = 2;
 
 	my $dir = '';
-	my $dirShort = '';
-	my $dirShortCased = '';
-	my $dirParent = '';
-	my $dirLevel = 0;
 
-	$dirs{$dir}{'dirShort'}{0} = $dirShort;
-	$dirs{$dir}{'dirShort'}{1} = $dirShortCased;
-	$dirs{$dir}{'dirParent'} = $dirParent;
-	$dirs{$dir}{'level'} = $dirLevel;
-	# will be determined later
-	$dirs{$dir}{'extentStart'}{0} = 0;
-	$dirs{$dir}{'extentSize'}{0} = 0;
-	$dirs{$dir}{'extentStart'}{1} = 0;
-	$dirs{$dir}{'extentSize'}{1} = 0;
-	$dirs{$dir}{'pathIndex'} = -1;
-	$dirs{$dir}{'public'} = $isoPublicDefault;
+	# TODO no longer needed since read current directory to get directory
+	# info
+	# my $dirShort = '';
+	# my $dirShortCased = '';
+	# my $dirParent = '';
+	# my $dirLevel = 0;
+	# $dirs{$dir}{'dirShort'}{0} = $dirShort;
+	# $dirs{$dir}{'dirShort'}{1} = $dirShortCased;
+	# $dirs{$dir}{'dirParent'} = $dirParent;
+	# $dirs{$dir}{'level'} = $dirLevel;
+	# # will be determined later
+	# $dirs{$dir}{'extentStart'}{0} = 0;
+	# $dirs{$dir}{'extentSize'}{0} = 0;
+	# $dirs{$dir}{'extentStart'}{1} = 0;
+	# $dirs{$dir}{'extentSize'}{1} = 0;
+	# $dirs{$dir}{'pathIndex'} = -1;
+	# $dirs{$dir}{'public'} = $isoPublicDefault;
 
 	if ( $isoMatchFileExtent < 0 ) {
 	    die "Need to specify \$isoMatchFileExtent\n";
@@ -1222,15 +1228,29 @@ sub DetermineFileInformationForIso {
 
 	open( PIPE, $pipe ) or die "Could not pipe file/command: $pipe\n";
 	while ( my $line = <PIPE> ) {
-	    # TODO doesn't support subdirectories
+	    # TODO has partially tested support for subdirectories
 	    # supports iso level 1 (8.3 filename) and lowercase
 	    if ( $line =~ /\[\s*([\d]+)\s+[0]+\s*\]\s*([A-Za-z][A-Za-z0-9_]{0,7}\.[A-Za-z0-9\.]{1,3});/ ) {
 		my $offset = $1 - $isoMatchFileExtent;
-		my $file = $2;
-		&AddFileInformationForIso($file,$file,uc($file),$file,'',$offset);
+		my $fileShort = $2;
+		my $file = $dir . $fileShort;
+		# TODO fileReal is wrong for non Linux
+		&AddFileInformationForIso($file,$fileShort,uc($fileShort),$file,$dir,$offset);
+	    } elsif ( $line =~ m/^Directory listing of (\S+)\s*$/ ) {
+		$dir = $1;
+		$dir =~ s/^[\\\/\:]//;
+		$dir =~ s/[\\\/\:]/\//;
+		if ( exists $dirs{$dir} ) {
+		    if ( $dirs{$dir}{'public'} < $isoPublicDefault ) {
+			$dirs{$dir}{'public'} = $isoPublicDefault;
+		    }
+		}
 	    }
 	}
 	close PIPE;
+
+	# restore iso public
+	$isoPublicDefault = $isoPublicDefaultBackup;
     } else {
 	&AddDirInformationForIso('','','',cwd,'',0);
     }
@@ -1278,6 +1298,9 @@ sub AddDirInformationForIso {
 	    $dirs{$dir}{'extentStart'}{1} = 0;
 	    $dirs{$dir}{'extentSize'}{1} = 0;
 	    $dirs{$dir}{'pathIndex'} = -1;
+	    $dirs{$dir}{'public'} = $isoPublicDefault;
+	}
+	if ( $dirs{$dir}{'public'} < $isoPublicDefault ) {
 	    $dirs{$dir}{'public'} = $isoPublicDefault;
 	}
 	# might make fake directories, so real directory does not need to exist
@@ -1490,7 +1513,9 @@ sub PrintExtentTablesToIso {
 		    my $fileStart = $fileExtent + $files{$file}{'offset'};
 		    my $fileSizeBytes = $files{$file}{'sizeBytes'};
 		    # empty files have no data, so just set to zero sector
-		    if ( $fileSizeBytes <= 0 ) {
+		    # if matching ISO use original offset
+		    if ( $fileSizeBytes <= 0 &&
+			 $isoMatch eq '' ) {
 			$fileStart = 0;
 		    }
 		    &PrintExtentToIso($fileStart,$fileSizeBytes,chr(0x00),$files{$file}{'fileShort'}{$joliet},1,$joliet);
@@ -1583,11 +1608,13 @@ sub PrintFilesToIso {
 	my $fileSizeSectors = $files{$file}{'sizeSectors'};
 
 	next if $fileSizeSectors <= 0;
+	next if $fileSizeBytes <= 0;
 	next unless $files{$file}{'public'} >= 1;
 
 	&FillIsoToIsoSector(chr(0x00),$fileStart);
 
 	if ( $fileStart*$sectorSize != &GetIsoByteIndex() ) {
+	    print "Arg: ".($fileStart*$sectorSize)." ".&GetIsoByteIndex()."\n";
 	    die "Bad ISO location to put file from extent: $file\n";
 	}
 
@@ -1666,7 +1693,10 @@ sub SetPublic {
 
 sub NumberOfSectorsForSize {
     my ($size) = @_;
-    return 1 + int( ( $size - 1 ) / $sectorSize );
+    # when on sector boundary this will round up (margin of error)
+    # return 1 + int( ( $size - 1 ) / $sectorSize );
+    # when on sector boundary this will round down (exact fit)
+    return int( ( $size + $sectorSize - 1 ) / $sectorSize );
 }
 
 sub _PadString_ {
