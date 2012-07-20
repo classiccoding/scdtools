@@ -27,6 +27,8 @@ my $tmpFileRemoveAfterUse = 1;
 my $constantColorBlack = chr(0x00).chr(0x00);
 my $constantColorPink  = chr(0x0E).chr(0x0E);
 
+# TODO need a consistent method for color indexing
+
 sub GetHelpString {
     return '[options-palette]
   -asmpal=<file>        output palette to assembly file
@@ -53,10 +55,10 @@ sub new {
    $self->{'colorsMissing'} = {};
    $self->{'colorsPerPalette'} = 15;
    $self->{'paletteCount'} = 1;
-   $self->{'paletteFileOutputAsm'} = '';
-   $self->{'paletteFileOutputBin'} = '';
-   $self->{'paletteFileInput'} = '';
-   $self->{'paletteFileInputOffset'} = 0;
+   $self->{'fileOutputAsm'} = '';
+   $self->{'fileOutputBin'} = '';
+   $self->{'fileInput'} = '';
+   $self->{'fileInputOffset'} = 0;
    $self->{'magicPink'} = 0;
    $self->{'magicBlack'} = 0;
    $self->{'verbosity'} = 2;
@@ -83,6 +85,16 @@ sub SetMaxColorCount {
     }
 }
 
+# TODO inconsistent indexing...
+sub GetColor {
+    my ($self,$index) = @_;
+    if ( $index <= $#{$self->{'colors'}} ) {
+	return $self->{'colors'}[$index];
+    }
+    return chr(0x00).chr(0x00);
+}
+
+
 sub GetColorsCountRead {
     my ($self) = @_;
     return $self->{'colorsCountRead'};
@@ -98,6 +110,11 @@ sub GetColorsPerPalette {
     return $self->{'colorsPerPalette'};
 }
 
+sub GetPaletteCount {
+    my ($self) = @_;
+    return $self->{'paletteCount'};
+}
+
 sub SetPaletteCount {
     my ($self,$arg) = @_;
     $self->{'paletteCount'} = $arg;
@@ -108,15 +125,15 @@ sub ParseArg {
     if ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
  	$self->{'paletteCount'} = $2;
     } elsif ( $arg =~ /^-asmpal(ette)?=(.*)$/i ) {
- 	$self->{'paletteFileOutputAsm'} = $2;
+ 	$self->{'fileOutputAsm'} = $2;
     } elsif ( $arg =~ /^-binpal(ette)?=(.*)$/i ) {
- 	$self->{'paletteFileOutputBin'} = $2;
+ 	$self->{'fileOutputBin'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?file=(.+)$/i ) {
- 	$self->{'paletteFileInput'} = $2;
+ 	$self->{'fileInput'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?byteoffset=(\d+)/i ) {
- 	$self->{'paletteFileInputOffset'} = $2;
+ 	$self->{'fileInputOffset'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?offset=(\d+)$/i ) {
- 	$self->{'paletteFileInputOffset'} = 32 * $2;
+ 	$self->{'fileInputOffset'} = 32 * $2;
     } elsif ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
  	$self->{'paletteCount'} = $2;
     } elsif ( $arg =~ /^-magicpink$/i ) {
@@ -129,6 +146,7 @@ sub ParseArg {
 	my $colorString = $1;
 	my $color = chr(hex(substr($colorString,0,1))).chr((hex(substr($colorString,1,1))<<4)|(hex(substr($colorString,2,1))));
 	$self->AddColor($color);
+	$self->{'colorsCountRead'} = $self->{'colorsCount'};
     } else {
 	if ( $arg =~ /^-nocomments$/i ) {
 	    $self->{'comments'} = 0;
@@ -146,36 +164,36 @@ sub ParseArg {
 
 sub ReadPalette {
     my ($self) = @_;
-    my $paletteFileInput = $self->{'paletteFileInput'};
-    if ( $paletteFileInput eq '' ) {
+    my $fileInput = $self->{'fileInput'};
+    if ( $fileInput eq '' ) {
 	return;
     }
-    if ( ! -e $paletteFileInput ) {
-	die "Bad palette file: ".$paletteFileInput."\n";
+    if ( ! -e $fileInput ) {
+	die "Bad palette file: ".$fileInput."\n";
     }
     my $tmpFileRemove = 0;
-    if ( $paletteFileInput =~ m/\.(asm|68k)$/i ) {
-	my $paletteAsmFile = $paletteFileInput;
-	$paletteFileInput = $tmpFile;
+    if ( $fileInput =~ m/\.(asm|68k)$/i ) {
+	my $asmFile = $fileInput;
+	$fileInput = $tmpFile;
 	$tmpFileRemove = $tmpFileRemoveAfterUse;
-	system("scdasm -v=".$self->{'verbosity'}." $paletteAsmFile ".$paletteFileInput);
-	if ( ! -e $paletteFileInput ) {
-	    die "Bad scdasm since didn't make: $paletteFileInput";
+	system("scdasm -v=".$self->{'verbosity'}." $asmFile ".$fileInput);
+	if ( ! -e $fileInput ) {
+	    die "Bad scdasm since didn't make: $fileInput";
 	}
     }
 
     if ( $self->{'paletteCount'} <= 0 ) {
 	# allow partial palette to count as a whole palette
-	$self->{'paletteCount'} = ( ( -s $paletteFileInput ) - $self->{'paletteFileInputOffset'} + 31 ) >> 5;
+	$self->{'paletteCount'} = ( ( -s $fileInput ) - $self->{'fileInputOffset'} + 31 ) >> 5;
     }
 
     my $paletteCountInBytes = 32 * $self->{'paletteCount'};
     my $paletteData = chr(0x00)x$paletteCountInBytes;
 
-    open( PALETTE, $paletteFileInput ) or die "Cannot read palette file: $!\n";
-    binmode PALETTE;
-    seek(PALETTE,$self->{'paletteFileInputOffset'},0);
-    my $paletteReadCountInBytes = read(PALETTE,$paletteData,$paletteCountInBytes);
+    open( DATA, $fileInput ) or die "Cannot read palette file: $!\n";
+    binmode DATA;
+    seek(DATA,$self->{'fileInputOffset'},0);
+    my $paletteReadCountInBytes = read(DATA,$paletteData,$paletteCountInBytes);
     # for a partial palette, do not add empty colors
     # will add these on output
     for ( my $paletteDataByte = 0; $paletteDataByte < $paletteReadCountInBytes; $paletteDataByte += 2 ) {
@@ -184,7 +202,7 @@ sub ReadPalette {
 	    $self->AddColor(substr($paletteData,$paletteDataByte,2));
 	}
     }
-    close PALETTE;
+    close DATA;
 
     if ( $tmpFileRemove ) {
 	unlink $tmpFile;
@@ -195,8 +213,8 @@ sub ReadPalette {
 
 sub OutputPalette {
     my ($self) = @_;
-    $self->OutputPaletteForFileAndBinMode($self->{'paletteFileOutputAsm'},0);
-    $self->OutputPaletteForFileAndBinMode($self->{'paletteFileOutputBin'},1);
+    $self->OutputPaletteForFileAndBinMode($self->{'fileOutputAsm'},0);
+    $self->OutputPaletteForFileAndBinMode($self->{'fileOutputBin'},1);
 }
 
 sub OutputPaletteForFileAndBinMode {
@@ -205,12 +223,12 @@ sub OutputPaletteForFileAndBinMode {
 	return;
     }
     my $fileContents = $self->GetOutputPaletteData($bin);
-    open(PALETTE,'>'.$file);
+    open(DATA,'>'.$file);
     if ( $bin ) {
-	binmode PALETTE;
+	binmode DATA;
     }
-    print PALETTE $fileContents;
-    close PALETTE;
+    print DATA $fileContents;
+    close DATA;
 }
 
 sub GetOutputPaletteData {
@@ -445,54 +463,3 @@ sub PrintMissingColors {
 
 1;
 
-
-
-###############################################################################
-# OLD CODE that might be useful to reinstate
-###############################################################################
-
-# if ( $missingColors ) {
-#     print STDERR "Colors detected exceeded colors allowed in palette\n";
-# }
-
-# my @colors = sort {$missingColors{$b} <=> $missingColors{$a}} keys %missingColors;
-
-# if ( $paletteGet ) {
-#     my $index = 0;
-#     if ( $#colors + 1 > $paletteCount * 16 - 1 ) {
-# 	print STDERR "Too many colors for one palette (will use most frequent colors)\n";
-#     }
-#     for ( my $paletteIndex = 0; $paletteIndex < $paletteCount; $paletteIndex++ ) {
-# 	if ( $bin ) {
-# 	    print pack("n",0x0000);
-# 	} else {   
-# 	    if ( $comments ) {
-# 		print ";; palette\n";
-# 	    }
-# 	    print " dc.w \$0000\n";
-# 	}
-# 	for ( my $i = 0; $i < 15; $i++ ) {
-# 	    my $colorsIndex = $paletteIndex * 15 + $i;
-# 	    if ( $colorsIndex <= $#colors ) {
-# 		if ( $bin ) {
-# 		    print $colors[$colorsIndex];
-# 		} else {
-# 		    my $colorf = sprintf("\$%4.4X",unpack("n",$colors[$colorsIndex]));
-# 		    print ' dc.w '.$colorf."\n";
-# 		}
-# 	    } else {
-# 		if ( $bin ) {
-# 		    print pack("n",0x0000);
-# 		} else {
-# 		    print " dc.w \$0000\n";
-# 		}
-# 	    }
-# 	}
-#     }
-# } else {
-#     foreach my $color (@colors) {
-# 	my $count = $missingColors{$color};
-# 	my $colorf = sprintf("\$%4.4X",unpack("n",$color));
-# 	print STDERR "Palette does not contain color: $colorf ($count)\n";
-#     }
-# }

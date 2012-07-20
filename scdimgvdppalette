@@ -113,7 +113,16 @@ sub ImgExtractColors($) {
 	if ( $width % $boundary != 0 || $height % $boundary != 0 ) {
 	    my $widthNew = int(($width+$boundary-1)/$boundary) * $boundary;
 	    my $heightNew = int(($height+$boundary-1)/$boundary) * $boundary;
-	    $imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>(($widthNew-$width)>>1),'y'=>(($heightNew-$height)>>1),'background'=>'rgb(0,0,0)');
+	    my $x = (($widthNew-$width)>>1);
+	    my $y = (($heightNew-$height)>>1);
+	    print STDERR "$width $widthNew $height $heightNew $x $y\n";
+	    # offsets don't work with newer versions of image magick for extent
+	    #$imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>$x,'y'=>$y,'background'=>'rgb(0,0,0)');
+	    #$imgOriginal->Extent('geometry'=>"${widthNew}x${heightNew}+${x}+${y}",'background'=>'rgb(0,0,0)');
+
+	    # so instead we can extent and roll
+	    $imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'background'=>'rgb(0,0,0)');
+	    $imgOriginal->Roll('x'=>$x,'y'=>$y);
 	}
     }
 

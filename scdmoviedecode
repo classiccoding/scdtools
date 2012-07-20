@@ -1161,7 +1161,7 @@ sub WriteImageData {
     my $tileDataFile = &WriteTileData($index,$tileData);
 
     if ( $extractImagePNGs ) {
-	my $cmd = "scdtile2img $scdtile2imgArgs -palfile=$paletteDataFile -map -width=$width $tileDataFile";
+	my $cmd = "scdtile2img $scdtile2imgArgs -palfile=$paletteDataFile -plane -width=$width -tilesfile=$tileDataFile -imgfile=$tileDataFile.png";
 	if ( $pngcrush ) {
 	    $cmd .= " -pngcrush";
 	}
