@@ -42,6 +42,7 @@ my @imgFiles;
 my $resizeWidth = 0;
 my $resizeHeight = 0;
 my $resizeToTiles = 0;
+my $ditherOrdered = '';
 my $ditherVdp = 'fs';
 my $ditherQuantize = 'fs';
 my $ditherFinal = 'fs';
@@ -60,6 +61,11 @@ foreach my $arg (@ARGV) {
 	$resizeToTiles = 1;
     } elsif ( $arg =~ /^-resizetoeventiles?$/i ) {
 	$resizeToTiles = 2;
+    } elsif ( $arg =~ /^-dither=(2x2|4x2)$/i ) {
+	$ditherOrdered = $1;
+	$ditherVdp = 'none';
+	$ditherQuantize = 'none';
+	$ditherFinal = 'none';
     } elsif ( $arg =~ /^-dither=(none|r|fs)$/i ) {
 	$ditherVdp = lc($1);
 	$ditherQuantize = lc($1);
@@ -126,6 +132,25 @@ sub ImgExtractColors($) {
 	}
     }
 
+    if ( $ditherOrdered ne '' ) {
+	my $width = $imgOriginal->Get('width');
+	my $height = $imgOriginal->Get('height');
+	for ( my $y = 0; $y < $height; $y++ ) {
+	    for ( my $x = 0; $x < $width; $x++ ) {
+		my @colors = $imgOriginal->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
+		# get ordered dither add, convert to normalized value
+		my $orderedDitherAdd = &SCDTools::Palette::GetOrderedDitherAdd($ditherOrdered,$x,$y)/256.0;
+		for ( my $c = 0; $c < 3; $c++ ) {
+		    $colors[$c] += $orderedDitherAdd;
+		    if ( $colors[$c] > 1 ) {
+			$colors[$c] = 1;
+		    }
+		}
+		$imgOriginal->SetPixel('channel'=>'RGB','x'=>$x,'y'=>$y,'color'=>\@colors);
+	    }
+	}
+    }
+		
     my $img = $imgOriginal->Clone();
 
     if ( $palette->GetColorsCountRead() >= $colorCountMax ) {
@@ -265,6 +290,8 @@ scdimgvdppalette [options] <imgfiles>
   <dither>                   none - no dithering
                              r    - Riemersma dithering
                              fs   - Floyd-Steinberg dithering (default)
+                             2x2  - ordered 2x2
+                             4x2  - ordered 4x2
 
 ';
 }

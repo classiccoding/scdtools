@@ -27,6 +27,14 @@ my $tmpFileRemoveAfterUse = 1;
 my $constantColorBlack = chr(0x00).chr(0x00);
 my $constantColorPink  = chr(0x0E).chr(0x0E);
 
+# [ 0 3 ]
+# [ 2 1 ]
+my @orderDitherMatrix2x2 = ( 0, 3, 2, 1 );
+
+# [ 0 6 1 7 ]
+# [ 4 2 5 3 ]
+my @orderDitherMatrix4x2 = ( 0, 6, 1, 7, 4, 2, 5, 3 );
+
 # TODO need a consistent method for color indexing
 
 sub GetHelpString {
@@ -459,6 +467,18 @@ sub PrintMissingColors {
 	my $colorf = sprintf("\$%4.4X",unpack("n",$color));
 	print STDERR "Palette does not contain color: $colorf ($count)\n";
     }
+}
+
+sub GetOrderedDitherAdd {
+    #my $orderedDitherAdd = ($orderDitherMatrix2x2[(2*($y & 1)+($x & 1))] << 3)/256.0;
+    my ($format,$x,$y) = @_;
+    my $orderedDitherAdd = 0;
+    if ( $format eq '4x2' ) {
+	$orderedDitherAdd = $orderDitherMatrix4x2[(4*($y & 1)+($x & 3))] << 2;
+    } elsif ( $format eq '2x2' ) {
+	$orderedDitherAdd = $orderDitherMatrix2x2[(2*($y & 1)+($x & 1))] << 3;
+    }
+    return $orderedDitherAdd;
 }
 
 1;
