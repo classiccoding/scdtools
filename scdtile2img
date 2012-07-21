@@ -1,0 +1,607 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2012 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# convert data from genesis/segacd to images
+###############################################################################
+
+# TODO more verbosity...
+
+use strict;
+use warnings;
+
+use POSIX qw/ceil/;
+
+use FindBin;
+use lib $FindBin::Bin;
+use SCDTools::Palette;
+
+my $palette = SCDTools::Palette->new();
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $verbosity = 2;
+
+my $paletteMapCinepakFile = '';
+
+my $tilesFile = '';
+my $tilesOffset = 0;
+my $tilesCount = 0;
+my $tilesCompress = 0;
+my $tilesWidth = 32;
+my $tilesWidthShift = 5;
+# default to plane (plane tile order and tile reuse)
+my $tilesOrderPlane = 1;
+my $tilesReuse = 0;
+
+my $tileMapFile = '';
+my $tileMapOffset = 0;
+my $tileMap2TilesOffset = 0;
+my $tileMapWidth = 1;
+my $tileMapWidthBad = 0;
+
+my $imgWidth = 0;
+my $imgHeight = 0;
+
+my $pngcrush = 0;
+my $trans = 1;
+
+my $background = 0;
+my $pngSRGB = 0;
+
+my $imgFile = '';
+
+my $aspectX = 0;
+my $aspectY = 0;
+
+my @tiles;
+
+my $tmpFile = 'TMP.BIN';
+my $tmpFileRemoveAfterUse = 1;
+
+foreach my $arg (@ARGV) {
+    if ( $palette->ParseArg($arg) ) {
+	# do nothing
+    } elsif ( $arg =~ /^-palmapcinepak=(.+)$/i ) {
+	$paletteMapCinepakFile = $1;
+    } elsif ( $arg =~ /^-sprite$/i ) {
+	$tilesOrderPlane = 0;
+	$tilesReuse = 0;
+    } elsif ( $arg =~ /^-plane$/i ) {
+	$tilesOrderPlane = 1;
+	$tilesReuse = 0;
+    } elsif ( $arg =~ /^-width=(\d+)$/i ) {
+	$imgWidth = $1;
+	if ( $imgWidth & 7 ) {
+	    die "Bad -imgwidth\n";
+	}
+    } elsif ( $arg =~ /^-height=(\d+)$/i ) {
+	$imgHeight = $1;
+	if ( $imgHeight & 7 ) {
+	    die "Bad -imgheight\n";
+	}
+    } elsif ( $arg =~ /^-aspect320x240$/i ) {
+	$aspectX = 320;
+	$aspectY = 240;
+    } elsif ( $arg =~ /^-aspect256x240$/i ) {
+	$aspectX = 256;
+	$aspectY = 240;
+    } elsif ( $arg =~ /^-aspect320x224$/i ) {
+	$aspectX = 320;
+	$aspectY = 224;
+    } elsif ( $arg =~ /^-aspect256x224$/i ) {
+	$aspectX = 256;
+	$aspectY = 224;
+    } elsif ( $arg =~ /^-pngcrush$/i ) {
+	$pngcrush = 1;
+    } elsif ( $arg =~ /^-notransparency$/i ) {
+	$trans = 0;
+    } elsif ( $arg =~ /^-background$/i ) {
+	$background = 1;
+    } elsif ( $arg =~ /^-tilesfile=(.+)$/i ) {
+	$tilesFile = $1;
+    } elsif ( $arg =~ /^-tilesbyteoffset=(\d+)$/i ) {
+	$tilesOffset = $1;
+    } elsif ( $arg =~ /^-tilesoffset=(\d+)$/i ) {
+	$tilesOffset = $tilesWidth * $1;
+    } elsif ( $arg =~ /^-tilescount=(\d+)$/i ) {
+	$tilesCount = $1;
+    } elsif ( $arg =~ /^-tilescompress=(\d+)$/i ) {
+	$tilesCompress = $1;
+	if ( $tilesCompress == 1 ) {
+	    $tilesWidth = 16;
+	    $tilesWidthShift = 4;
+	} elsif ( $tilesCompress == 2 ) {
+	    $tilesWidth = 8;
+	    $tilesWidthShift = 3;
+	} elsif ( $tilesCompress != 0 ) {
+	    die "Only support -compress=[012]\n";
+	}
+    } elsif ( $arg =~ /^-mapfile=(.+)$/i ) {
+	$tileMapFile = $1;
+	$tilesOrderPlane = 1;
+	$tilesReuse = 1;
+    } elsif ( $arg =~ /^-mapoffset=(\d+)$/i ) {
+	$tileMapOffset = $tileMapWidth * $1;
+    } elsif ( $arg =~ /^-mapbyteoffset=(\d+)$/i ) {
+	$tileMapOffset = $1;
+    } elsif ( $arg =~ /^-map2tilesoffset=(\d+)$/i ) {
+	$tileMap2TilesOffset = $1;
+    } elsif ( $arg =~ /^-map2tilesoffset=(0x|\$)([0-9A-Fa-f]+)$/i ) {
+	$tileMap2TilesOffset = $1;
+    } elsif ( $arg =~ /^-mapwidth=([12])$/i ) {
+	$tileMapWidth = $1;
+    } elsif ( $arg =~ /^-imgfile=(.+)$/i ) {
+	$imgFile = $1;
+    } elsif ( $arg =~ /^-v=(\d+)$/i ) {
+	$verbosity = $1;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( $imgFile eq '' ) {
+    print STDERR "\nNeed to specify -imgfile\n";
+    &Help();
+}
+
+$palette->ReadPalette();
+my $paletteMapCinepak = &ReadPaletteMapCinepak();
+&ReadTiles();
+my $tileMapData = &ReadTileMap();
+my $tileMapDataLength = length($tileMapData);
+
+&Tile2Img();
+
+
+###############################################################################
+
+
+sub Tile2Img {
+    my $width;
+    my $height;
+
+    my $tileCount = 0;
+    if ( $tilesReuse ) {
+	$tileCount = $tileMapDataLength/$tileMapWidth;
+    } else {
+	$tileCount = $#tiles+1;
+    }
+
+    if ( $imgWidth ) {
+	$width = $imgWidth;
+	if ( $imgHeight ) {
+	    $height = $imgHeight;
+	} else {
+	    $height = 8*ceil($tileCount/($width>>3));
+	}
+    } elsif ( $imgHeight ) {
+	$height = $imgHeight;
+	$width = 8*ceil($tileCount/($height>>3));
+    } else {
+	$height = 8;
+	$width = 8*$tileCount;
+    }
+
+    my $png = '';
+    my $chunk;
+
+    # PNG file signature
+    $png .= chr(0x89).'PNG'.chr(0x0D).chr(0x0A).chr(0x1A).chr(0x0A);
+
+    # IHDR image header chunk
+    $chunk = 'IHDR';
+    # width
+    $chunk .= pack("N",$width);
+    # height
+    $chunk .= pack("N",$height);
+    # bit depth
+    if ( $palette->GetPaletteCount() == 1 ) {
+	$chunk .= chr(4);
+    } else {
+	$chunk .= chr(8);
+    }
+    # color type (palette)
+    $chunk .= chr(3);
+    # compression method
+    $chunk .= chr(0);
+    # filter method
+    $chunk .= chr(0);
+    # interlace method
+    $chunk .= chr(0);
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    if ( $pngSRGB ) {
+	# sRGB Standard RGB color space
+	$chunk = 'sRGB';
+	# rendering intent (perceptual)
+	$chunk .= chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    # PLTE palette chunk
+    $chunk = 'PLTE';
+    for ( my $pIndex = 0; $pIndex < $palette->GetPaletteCount(); $pIndex++ ) {
+
+	for ( my $cIndex = 0; $cIndex < 16-$palette->GetColorsPerPalette(); $cIndex++ ) {
+	    $chunk .= &SCDTools::Palette::ConvertVDPColorToRGB24Bit(chr(0x00).chr(0x00));
+	}
+	for ( my $cIndex = 0; $cIndex < $palette->GetColorsPerPalette(); $cIndex++ ) {
+	    my $color = $palette->GetColor($pIndex*$palette->GetColorsPerPalette()+$cIndex);
+	    $chunk .= &SCDTools::Palette::ConvertVDPColorToRGB24Bit($color);
+	}
+    }
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    # tRNS Transparency
+    if ( $trans ) {
+	$chunk = 'tRNS';
+	$chunk .= chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    if ( $background ) {
+	# bKGD Background color
+	$chunk = 'bKGD';
+	$chunk .= chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    if ( $aspectX && $aspectY ) {
+	# pHYs Physical Pixel Dimenions
+	$chunk = 'pHYs';
+	$chunk .= pack("N",$aspectX*3).pack("N",$aspectY*4).chr(0x00);
+	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+    }
+
+    # IDAT Image data
+    # basically reordering the data
+    $chunk = 'IDAT';
+    my $filtered = '';
+    my $w8 = int( $width / 8 );
+    my $h8 = int( $height / 8 );
+    for ( my $y = 0; $y < $height; $y++ ) {
+	my $tileY = int( $y / 8 );
+	# filter byte (none)
+	$filtered .= chr(0x00);
+	for ( my $x = 0; $x < $width; $x += 2 ) {
+	    my $tileX = int( $x / 8 );
+	    my $value;
+	    my $tilesIndex;
+	    if ( $tilesOrderPlane ) {
+		$tilesIndex = $tileY * $w8 + $tileX;
+	    } else {
+		$tilesIndex = $tileY + $tileX * $h8;
+	    }
+	    if ( $tilesReuse ) {
+		my $tileMapIndex = $tileMapWidth*$tilesIndex;
+		if ( $tileMapIndex + $tileMapWidth > $tileMapDataLength ) {
+		    $tilesIndex = 0;
+		} else {
+		    if ( $tileMapWidth > 1 ) {
+			# TODO palette info too?
+			$tilesIndex = unpack("n",substr($tileMapData,$tileMapIndex+$tileMapWidth-2,2)) & 0x7FF;
+		    } else {
+			$tilesIndex = ord(substr($tileMapData,$tileMapIndex,1));
+		    }
+		    $tilesIndex -= $tileMap2TilesOffset;
+		}
+	    }
+	    if ( $tilesIndex > $#tiles ) {
+		$value = chr(0x00);
+	    } else {
+		$value = substr($tiles[$tilesIndex],($x%8)/2+($y%8)*4,1);
+	    }
+	    if ( $palette->GetPaletteCount() > 1 &&
+		 $paletteMapCinepak ne '' ) {
+		my $valueInt = ord($value);
+		my $pal = (ord(substr($paletteMapCinepak,int($tilesIndex/4),1))>>2*((3-($tilesIndex%4)))) & 0x3;
+		$value =
+		    chr((($valueInt>>4) & 0xF)|($pal<<4)).
+		    chr((($valueInt) & 0xF)|($pal<<4));
+	    }
+	    $filtered .= $value;
+	}
+    }
+    $chunk .= &zlib($filtered);
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    # IEND Image trailer
+    $chunk = 'IEND';
+    $png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
+
+    my $pngFile = $pngcrush ? 'TMP.PNG' : $imgFile;
+
+    # write the simplest PNG file
+    open( PNG, ">$pngFile" ) or die "Could not write $pngFile: $!\n";
+    binmode PNG;
+    print PNG $png;
+    close PNG;
+
+    if ( $pngcrush ) {
+	system("pngcrush $pngFile $imgFile > /dev/null");
+	system("rm $pngFile");
+    }
+}
+
+
+sub ReadPaletteMapCinepak {
+    return '' if $paletteMapCinepakFile eq '';
+
+    if ( ! -e $paletteMapCinepakFile ) {
+	die "Bad palette file: $paletteMapCinepakFile\n";
+    }
+    # TODO asm?
+
+    my $paletteMapCinepak = '';
+
+    open( PALMAP, $paletteMapCinepakFile ) or die "Cannot read palette file: $!\n";
+    binmode PALMAP;
+    my $paletteMapCinepakFileSize = -s $paletteMapCinepakFile;
+    read(PALMAP,$paletteMapCinepak,$paletteMapCinepakFileSize);
+    close PALMAP;
+
+    return $paletteMapCinepak;
+    
+}
+
+sub ReadTiles {
+    if ( $tilesFile eq '' ) {
+	return;
+    }
+    if ( ! -e $tilesFile ) {
+	die "Bad tiles file: $tilesFile";
+    }
+    my $tmpFileRemove = 0;
+    if ( $tilesFile =~ m/\.(asm|68k)$/i ) {
+	my $tilesAsmFile = $tilesFile;
+	$tilesFile = $tmpFile;
+	$tmpFileRemove = $tmpFileRemoveAfterUse;
+	system("scdasm -v=$verbosity $tilesAsmFile $tilesFile");
+	if ( ! -e $tilesFile ) {
+	    die "Bad scdasm since didn't make: $tilesFile";
+	}
+    }
+
+    if ( $tilesCount <= 0 ) {
+	$tilesCount = ( ( -s $tilesFile ) - $tilesOffset ) >> $tilesWidthShift;
+    }
+
+    my $tilesCountInBytes = $tilesCount*$tilesWidth;
+    my $tilesData = chr(0x00)x$tilesCountInBytes;
+
+    open( TILES, $tilesFile ) or die "Cannot read tiles file: $!\n";
+    binmode TILES;
+    seek(TILES,$tilesOffset,0);
+    my $tilesDataBuffer;
+    if ( read(TILES,$tilesDataBuffer,$tilesCountInBytes) == $tilesCountInBytes ) {
+	$tilesData = $tilesDataBuffer;
+	for ( my $tilesIndex = 0; $tilesIndex < $tilesCount; $tilesIndex++ ) {
+	    my $tileData = chr(0x00)x32;
+	    if ( $tilesCompress == 0 ) {
+		$tileData = substr($tilesData,$tilesIndex*$tilesWidth,$tilesWidth);
+	    } else {
+		# TODO
+		die "Cannot handle unextracting compressed tiles yet\n";
+	    }
+	    push @tiles, $tileData;
+	}
+    }
+    close TILES;
+
+    if ( $tmpFileRemove ) {
+	unlink $tmpFile;
+    }
+}
+
+sub ReadTileMap {
+    if ( $tileMapFile eq '' ) {
+	return '';
+    }
+    if ( ! -e $tileMapFile ) {
+	die "Bad tile map file: $tileMapFile";
+    }
+    my $tmpFileRemove = 0;
+    if ( $tileMapFile =~ m/\.(asm|68k)$/i ) {
+	my $tileMapAsmFile = $tileMapFile;
+	$tileMapFile = $tmpFile;
+	$tmpFileRemove = $tmpFileRemoveAfterUse;
+	system("scdasm -v=$verbosity $tileMapAsmFile $tileMapFile");
+	if ( ! -e $tileMapFile ) {
+	    die "Bad scdasm since didn't make: $tileMapFile";
+	}
+    }
+
+    my $tileMapLength = int(((-s $tileMapFile) - $tileMapOffset)/ $tileMapWidth) * $tileMapWidth;
+
+    open( TILEMAP, $tileMapFile ) or die "Cannot read tile map file: $!\n";
+    binmode TILEMAP;
+    seek(TILEMAP,$tileMapOffset,0);
+    my $tileMapDataBuffer;
+    my $tileMapData = chr(0x00)x$tileMapLength;
+    if ( read(TILEMAP,$tileMapDataBuffer,$tileMapLength) == $tileMapLength ) {
+	$tileMapData = $tileMapDataBuffer;
+    }
+    close TILEMAP;
+
+    if ( $tmpFileRemove ) {
+	unlink $tmpFile;
+    }
+
+    return $tileMapDataBuffer;
+}
+
+
+
+###############################################################################
+
+
+
+# adapted from http://www.libpng.org/pub/png/spec/1.2/PNG-CRCAppendix.html
+# which contains example C source code of how to get the crc
+
+# Table of CRCs of all 8-bit messages.
+my @crc_table;
+   
+# Flag: has the table been computed? Initially false.
+my $crc_table_computed = 0;
+   
+# Make the table for a fast CRC.
+sub make_crc_table() {
+    my $c;
+    my $n;
+    my $k;
+   
+    for ($n = 0; $n < 256; $n++) {
+	$c = $n;
+	for ($k = 0; $k < 8; $k++) {
+	    if ($c & 1) {
+		$c = 0xedb88320 ^ ($c >> 1);
+	    } else {
+		$c = $c >> 1;
+	    }
+	}
+	$crc_table[$n] = $c;
+    }
+    $crc_table_computed = 1;
+}
+   
+# Update a running CRC with the bytes buf[0..len-1]--the CRC
+# should be initialized to all 1's, and the transmitted value
+# is the 1's complement of the final running CRC (see the
+# crc() routine below)).
+   
+sub update_crc($$$) {
+    my ($crc, $buf, $len) = @_;
+    my $c = $crc;
+    my $n;
+   
+    if (!$crc_table_computed) {
+	&make_crc_table();
+    }
+    for ($n = 0; $n < $len; $n++) {
+	$c = $crc_table[($c ^ ord(substr($buf,$n,1))) & 0xff] ^ ($c >> 8);
+    }
+    return $c;
+}
+   
+# Return the CRC of the bytes buf[0..len-1].
+sub crc($) {
+    my ($buf) = @_;
+    my $len = length($buf);
+    return &update_crc(0xffffffff, $buf, $len) ^ 0xffffffff;
+}
+
+
+###############################################################################
+
+
+# based on information from: http://www.zlib.net/zlib_docs.html
+
+sub zlib($) {
+    my ($buf) = @_;
+    my $len = length($buf);
+    my $result = '';
+    # deflate compressed data
+    # window size 32k
+    # compressor used fastest algorithm
+    my $cinfo = 0;
+    while ( $len > 2**($cinfo+8) && $cinfo < 7 ) {
+	$cinfo++;
+    }
+    my $value = 0x0800 | ( $cinfo << 12 );
+    # determine FCHECK
+    $value = $value + ( 31 - ( $value % 31 ) );
+    $result .= pack("n",$value);
+
+    my $index = 0;
+    my $len2 = $len;
+    while ( $len2 ) {
+	my $l = $len2 > 0xffff ? 0xffff : $len2;
+	$len2 -= $l;
+	# uncompressed
+	# set last block if no more length
+	$result .= $len2 ? chr(0x00) : chr(0x01);
+	$result .= pack("v",$l);
+	$result .= pack("v",($l ^ 0xffff));
+	$result .= substr($buf,$index,$l);
+	$index += $l;
+    }
+    
+    my $s1 = 1;
+    my $s2 = 0;
+    my $n;
+    for ($n = 0; $n < $len; $n++) {
+	$s1 = ( $s1 + ord(substr($buf,$n,1)) ) % 65521;
+	$s2 = ( $s1 + $s2 ) % 65521;
+    }
+    my $addler32 = (($s2<<16)|$s1);
+
+    $result .= pack("N",$addler32);
+
+    return $result;
+}
+
+sub addler32($) {
+    my ($buf) = @_;
+    my $len = length($buf);
+}
+
+sub Help {
+    die '
+scdtile2img [options]
+
+[description]
+  converts Sega VDP format files to a PNG image
+
+[options]
+  -palmapcinepak=<file>  specifies the palette map file (cinepak format)
+  -tilesfile=<file>      specifies the tiles
+  -tilesoffset=<#>       tile offset of the first tile in the tiles file
+  -tilesbyteoffset=<#>   byte offset of the first tile in the tiles file
+  -tilescount=<#>        specifies the number of tiles in use
+  -tilescompress=<#>     compresses the tiles for reduced colors
+                         <#>=0: no compression (16 colors, default)
+                         <#>=1: compress to 2 bit color map (4 colors)
+                         <#>=2: compress to 1 bit color map (2 colors)
+  -mapfile=<file>        specifies the tile map
+                         (and specifies plane tile order and tile reuse)
+  -mapoffset=<#>         tile map offset of the first tile map entry
+  -mapbyteoffset=<#>     byte offset of the first tile map entry
+  -map2tilesoffset=<#>   the offset for the tile indexes in the tile map
+                         can specify decimal using no prefix
+                         can specify hexadecimal number using $ or 0x prefix
+  -mapwidth=<#>          specifies the map entry width in bytes (default is 1)
+  -plane                 specifies plane tile order and no tile reuse (default)
+  -sprite                specifies sprite tile order and no tile reuse
+  -width=<#>             specifies the width of the image
+  -height=<#>            specifies the height of the image
+  -aspect320x240         sets PNG aspect accordingly
+  -aspect256x240         sets PNG aspect accordingly
+  -aspect320x224         sets PNG aspect accordingly
+  -aspect256x224         sets PNG aspect accordingly
+  -pngcrush              call pngcrush to make smaller PNG files
+  -notransparency        do not use transparency for color 0
+  -background            set background color in PNG to black
+  -imgfile=<file>        the name of the output image file
+  -v=<#>                 specify verbosity
+
+';
+}
