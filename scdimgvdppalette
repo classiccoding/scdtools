@@ -121,7 +121,6 @@ sub ImgExtractColors($) {
 	    my $heightNew = int(($height+$boundary-1)/$boundary) * $boundary;
 	    my $x = (($widthNew-$width)>>1);
 	    my $y = (($heightNew-$height)>>1);
-	    print STDERR "$width $widthNew $height $heightNew $x $y\n";
 	    # offsets don't work with newer versions of image magick for extent
 	    #$imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>$x,'y'=>$y,'background'=>'rgb(0,0,0)');
 	    #$imgOriginal->Extent('geometry'=>"${widthNew}x${heightNew}+${x}+${y}",'background'=>'rgb(0,0,0)');
