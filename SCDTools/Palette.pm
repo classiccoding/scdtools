@@ -35,10 +35,32 @@ my @orderDitherMatrix2x2 = ( 0, 3, 2, 1 );
 # [ 4 2 5 3 ]
 my @orderDitherMatrix4x2 = ( 0, 6, 1, 7, 4, 2, 5, 3 );
 
+# [ 0 6 ]
+# [ 4 2 ]
+# [ 1 7 ]
+# [ 5 3 ]
+my @orderDitherMatrix2x4 = ( 0, 6, 4, 2, 1, 7, 5, 3 );
+
+# [  0 12  3 15 ]
+# [  8  4 11  7 ]
+# [  2 14  1 13 ]
+# [ 10  6  9  5 ]
+my @orderDitherMatrix4x4 = ( 0, 12, 3, 15, 8, 4, 11, 7, 2, 14, 1, 13, 10, 6, 9, 5 );
+
+# [  0 48 12 60  3 51 15 63 ]
+# [ 32 16 44 28 35 19 47 31 ]
+# [  8 56  4 52 11 59  7 55 ]
+# [ 40 24 36 20 43 27 39 23 ]
+# [  2 50 14 62  1 49 13 61 ]
+# [ 34 18 46 30 33 17 45 29 ]
+# [ 10 58  6 54  9 57  5 53 ]
+# [ 42 26 38 22 41 25 37 21 ]
+my @orderDitherMatrix8x8 = ( 0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4, 52, 11, 59, 7, 55, 40, 24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49, 13, 61, 34, 18, 46, 30, 33, 17, 45, 29, 10, 58, 6, 54, 9, 57, 5, 53, 42, 26, 38, 22, 41, 25, 37, 21 );
+
 # TODO need a consistent method for color indexing
 
 sub GetHelpString {
-    return '[options-palette]
+   return '[options-palette]
   -asmpal=<file>        output palette to assembly file
   -binpal=<file>        output palette to binary file
   -palfile=<file>       specifies the palette
@@ -48,6 +70,7 @@ sub GetHelpString {
   -magicpink            treat #FF00FF as transparent
   -magicblack           treat #000000 as transparent
   -colorzeronormal      treat color zero of each palette as a normal pixel
+  -directcolor          treat palette as 512 colors
   -addcolor=BGR         add VDP hex color to palette
 ';
 }
@@ -61,6 +84,7 @@ sub new {
    $self->{'colorsCount'} = 0;
    $self->{'colorsCountRead'} = 0;
    $self->{'colorsMissing'} = {};
+   $self->{'entriesPerPalette'} = 16;
    $self->{'colorsPerPalette'} = 15;
    $self->{'paletteCount'} = 1;
    $self->{'fileOutputAsm'} = '';
@@ -150,6 +174,10 @@ sub ParseArg {
 	$self->{'magicBlack'} = 1;
     } elsif ( $arg =~ /^-colorzeronormal$/i ) {
 	$self->{'colorsPerPalette'} = 16;
+	$self->{'entriesPerPalette'} = 16;
+    } elsif ( $arg =~ /^-directcolor$/i ) {
+	$self->{'colorsPerPalette'} = 512;
+	$self->{'entriesPerPalette'} = 512;
     } elsif ( $arg =~ /^-addcolor=([02468ACE]{3})$/i ) {
 	my $colorString = $1;
 	my $color = chr(hex(substr($colorString,0,1))).chr((hex(substr($colorString,1,1))<<4)|(hex(substr($colorString,2,1))));
@@ -192,7 +220,7 @@ sub ReadPalette {
 
     if ( $self->{'paletteCount'} <= 0 ) {
 	# allow partial palette to count as a whole palette
-	$self->{'paletteCount'} = ( ( -s $fileInput ) - $self->{'fileInputOffset'} + 31 ) >> 5;
+	$self->{'paletteCount'} = int( ( ( -s $fileInput ) - $self->{'fileInputOffset'} + 2*$self->{'entriesPerPalette'}-1 ) / ( 2 * $self->{'entriesPerPalette'} ) );
     }
 
     my $paletteCountInBytes = 32 * $self->{'paletteCount'};
@@ -206,7 +234,7 @@ sub ReadPalette {
     # will add these on output
     for ( my $paletteDataByte = 0; $paletteDataByte < $paletteReadCountInBytes; $paletteDataByte += 2 ) {
 	# may add color zero of each palette depending on -colorzeronormal
-	if ( ( ( $paletteDataByte >> 1 ) & 0xF ) >= 16 - $self->{'colorsPerPalette'} ) {
+	if ( ( ( $paletteDataByte >> 1 ) & 0xF ) >= $self->{'entriesPerPalette'} - $self->{'colorsPerPalette'} ) {
 	    $self->AddColor(substr($paletteData,$paletteDataByte,2));
 	}
     }
@@ -254,7 +282,7 @@ sub GetOutputPaletteData {
 	}
     }
     for ( my $paletteIndex = 0; $paletteIndex < $self->{'paletteCount'}; $paletteIndex++ ) {
-	for ( my $i = 0; $i < (16-$self->{'colorsPerPalette'}); $i++ ) {
+	for ( my $i = 0; $i < ($self->{'entriesPerPalette'}-$self->{'colorsPerPalette'}); $i++ ) {
 	    if ( $bin ) {
 		$fileContents .= pack("n",0x0000);
 	    } else {   
@@ -309,7 +337,7 @@ sub GetColorIndexWithNoAdding {
     for ( my $colorsIndex = 0; $colorsIndex < $colorsCount; $colorsIndex++ ) {
 	if ( $color eq $self->{'colors'}[$colorsIndex] ) {
 	    # account for each palette having unused transparent index
-	    $index = ( $colorsIndex % $self->{'colorsPerPalette'} ) + 16 * int($colorsIndex / $self->{'colorsPerPalette'}) + (16-$self->{'colorsPerPalette'});
+	    $index = ( $colorsIndex % $self->{'colorsPerPalette'} ) + $self->{'entriesPerPalette'} * int($colorsIndex / $self->{'colorsPerPalette'}) + ($self->{'entriesPerPalette'}-$self->{'colorsPerPalette'});
 	    last;
 	}
     }
@@ -322,7 +350,7 @@ sub AddColor {
     if ( $self->{'colorsCount'} < $self->{'colorsPerPalette'} * $self->{'paletteCount'} ) {
 	push @{$self->{'colors'}}, $color;
 	my $colorsIndex = $self->{'colorsCount'};
-	$index = ( $colorsIndex % $self->{'colorsPerPalette'} ) + 16 * int($colorsIndex / $self->{'colorsPerPalette'}) + (16-$self->{'colorsPerPalette'});
+	$index = ( $colorsIndex % $self->{'colorsPerPalette'} ) + $self->{'entriesPerPalette'} * int($colorsIndex / $self->{'colorsPerPalette'}) + ($self->{'entriesPerPalette'}-$self->{'colorsPerPalette'});
 	$self->{'colorsCount'}++;
 	# debug print
 	# printf("Adding color $index : \$%4.4X\n",unpack("n",$color));
@@ -470,13 +498,21 @@ sub PrintMissingColors {
 }
 
 sub GetOrderedDitherAdd {
-    #my $orderedDitherAdd = ($orderDitherMatrix2x2[(2*($y & 1)+($x & 1))] << 3)/256.0;
+    # returns value between 0 and 255 or -1 if invalid format
     my ($format,$x,$y) = @_;
     my $orderedDitherAdd = 0;
-    if ( $format eq '4x2' ) {
-	$orderedDitherAdd = $orderDitherMatrix4x2[(4*($y & 1)+($x & 3))] << 2;
+    if ( $format eq '8x8' ) {
+	$orderedDitherAdd = $orderDitherMatrix8x8[(8*($y & 7)+($x & 7))] << 2;
+    } elsif ( $format eq '4x4' ) {
+	$orderedDitherAdd = $orderDitherMatrix4x4[(4*($y & 3)+($x & 3))] << 4;
+    } elsif ( $format eq '4x2' ) {
+	$orderedDitherAdd = $orderDitherMatrix4x2[(4*($y & 1)+($x & 3))] << 5;
+    } elsif ( $format eq '2x4' ) {
+	$orderedDitherAdd = $orderDitherMatrix2x4[(2*($y & 3)+($x & 1))] << 5;
     } elsif ( $format eq '2x2' ) {
-	$orderedDitherAdd = $orderDitherMatrix2x2[(2*($y & 1)+($x & 1))] << 3;
+	$orderedDitherAdd = $orderDitherMatrix2x2[(2*($y & 1)+($x & 1))] << 6;
+    } else {
+	return -1;
     }
     return $orderedDitherAdd;
 }

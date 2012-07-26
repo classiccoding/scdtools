@@ -61,7 +61,7 @@ foreach my $arg (@ARGV) {
 	$resizeToTiles = 1;
     } elsif ( $arg =~ /^-resizetoeventiles?$/i ) {
 	$resizeToTiles = 2;
-    } elsif ( $arg =~ /^-dither=(2x2|4x2)$/i ) {
+    } elsif ( $arg =~ /^-dither=(2x2|4x2|2x4|4x4|8x8)$/i ) {
 	$ditherOrdered = $1;
 	$ditherVdp = 'none';
 	$ditherQuantize = 'none';
@@ -137,8 +137,8 @@ sub ImgExtractColors($) {
 	for ( my $y = 0; $y < $height; $y++ ) {
 	    for ( my $x = 0; $x < $width; $x++ ) {
 		my @colors = $imgOriginal->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x,'y'=>$y);
-		# get ordered dither add, convert to normalized value
-		my $orderedDitherAdd = &SCDTools::Palette::GetOrderedDitherAdd($ditherOrdered,$x,$y)/256.0;
+		# normalize (/256) and force onto 3 bit color (/8)
+		my $orderedDitherAdd = &SCDTools::Palette::GetOrderedDitherAdd($ditherOrdered,$x,$y)/2048.0;
 		for ( my $c = 0; $c < 3; $c++ ) {
 		    $colors[$c] += $orderedDitherAdd;
 		    if ( $colors[$c] > 1 ) {
@@ -291,6 +291,7 @@ scdimgvdppalette [options] <imgfiles>
                              fs   - Floyd-Steinberg dithering (default)
                              2x2  - ordered 2x2
                              4x2  - ordered 4x2
+                             4x4  - ordered 4x4
 
 ';
 }
