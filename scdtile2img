@@ -86,6 +86,9 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-plane$/i ) {
 	$tilesOrderPlane = 1;
 	$tilesReuse = 0;
+    } elsif ( $arg =~ /^-plane32x32blocks$/i ) {
+	# TODO undocumented
+	$tilesOrderPlane = 2;
     } elsif ( $arg =~ /^-width=(\d+)$/i ) {
 	$imgWidth = $1;
 	if ( $imgWidth & 7 ) {
@@ -213,6 +216,7 @@ sub Tile2Img {
     # height
     $chunk .= pack("N",$height);
     # bit depth
+    # TODO doesn't work for palettes that aren't 16 entries...
     if ( $palette->GetPaletteCount() == 1 ) {
 	$chunk .= chr(4);
     } else {
@@ -236,11 +240,13 @@ sub Tile2Img {
 	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
     }
 
+    my $transColorsPerPalette = $palette->GetEntriesPerPalette()-$palette->GetColorsPerPalette();
+
     # PLTE palette chunk
     $chunk = 'PLTE';
     for ( my $pIndex = 0; $pIndex < $palette->GetPaletteCount(); $pIndex++ ) {
 
-	for ( my $cIndex = 0; $cIndex < 16-$palette->GetColorsPerPalette(); $cIndex++ ) {
+	for ( my $cIndex = 0; $cIndex < $transColorsPerPalette; $cIndex++ ) {
 	    $chunk .= &SCDTools::Palette::ConvertVDPColorToRGB24Bit(chr(0x00).chr(0x00));
 	}
 	for ( my $cIndex = 0; $cIndex < $palette->GetColorsPerPalette(); $cIndex++ ) {
@@ -285,19 +291,26 @@ sub Tile2Img {
 	    my $tileX = int( $x / 8 );
 	    my $value;
 	    my $tilesIndex;
-	    if ( $tilesOrderPlane ) {
+	    if ( $tilesOrderPlane == 2 ) {
+		# TODO undocumented
+		$tilesIndex = ( $tileY & 0xFFFC ) * $w8 + ( $tileX * 4 ) + ( $tileY & 0x0003 );
+
+	    } elsif ( $tilesOrderPlane ) {
 		$tilesIndex = $tileY * $w8 + $tileX;
 	    } else {
 		$tilesIndex = $tileY + $tileX * $h8;
 	    }
+	    my $pal = 0;
 	    if ( $tilesReuse ) {
 		my $tileMapIndex = $tileMapWidth*$tilesIndex;
 		if ( $tileMapIndex + $tileMapWidth > $tileMapDataLength ) {
 		    $tilesIndex = 0;
 		} else {
 		    if ( $tileMapWidth > 1 ) {
-			# TODO palette info too?
-			$tilesIndex = unpack("n",substr($tileMapData,$tileMapIndex+$tileMapWidth-2,2)) & 0x7FF;
+			# TODO flips
+			my $tileMapValue = unpack("n",substr($tileMapData,$tileMapIndex+$tileMapWidth-2,2));
+			$tilesIndex = $tileMapValue & 0x07FF;
+			$pal = ( $tileMapValue & 0x6000 ) >> 13;
 		    } else {
 			$tilesIndex = ord(substr($tileMapData,$tileMapIndex,1));
 		    }
@@ -309,13 +322,20 @@ sub Tile2Img {
 	    } else {
 		$value = substr($tiles[$tilesIndex],($x%8)/2+($y%8)*4,1);
 	    }
-	    if ( $palette->GetPaletteCount() > 1 &&
-		 $paletteMapCinepak ne '' ) {
+	    if ( $palette->GetPaletteCount() > 1 ) {
+		if ( $paletteMapCinepak ne '' ) {
+		    $pal = (ord(substr($paletteMapCinepak,int($tilesIndex/4),1))>>2*((3-($tilesIndex%4)))) & 0x3;
+		}
 		my $valueInt = ord($value);
-		my $pal = (ord(substr($paletteMapCinepak,int($tilesIndex/4),1))>>2*((3-($tilesIndex%4)))) & 0x3;
-		$value =
-		    chr((($valueInt>>4) & 0xF)|($pal<<4)).
-		    chr((($valueInt) & 0xF)|($pal<<4));
+		my $c0 = ( $valueInt >> 4 ) & 0xF;
+		if ( $c0 >= $transColorsPerPalette ) {
+		    $c0 |= ($pal<<4);
+		}
+		my $c1 = ( $valueInt >> 0 ) & 0xF;
+		if ( $c1 >= $transColorsPerPalette ) {
+		    $c1 |= ($pal<<4);
+		}
+		$value = chr($c0).chr($c1);
 	    }
 	    $filtered .= $value;
 	}

@@ -137,6 +137,11 @@ sub GetColorsCount {
     return $self->{'colorsCount'};
 }
 
+sub GetEntriesPerPalette {
+    my ($self) = @_;
+    return $self->{'entriesPerPalette'};
+}
+
 sub GetColorsPerPalette {
     my ($self) = @_;
     return $self->{'colorsPerPalette'};
