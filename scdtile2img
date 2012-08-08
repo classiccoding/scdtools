@@ -291,6 +291,8 @@ sub Tile2Img {
 	    my $tileX = int( $x / 8 );
 	    my $value;
 	    my $tilesIndex;
+	    my $flipVert = 0;
+	    my $flipHorz = 0;
 	    if ( $tilesOrderPlane == 2 ) {
 		# TODO undocumented
 		$tilesIndex = ( $tileY & 0xFFFC ) * $w8 + ( $tileX * 4 ) + ( $tileY & 0x0003 );
@@ -307,10 +309,11 @@ sub Tile2Img {
 		    $tilesIndex = 0;
 		} else {
 		    if ( $tileMapWidth > 1 ) {
-			# TODO flips
 			my $tileMapValue = unpack("n",substr($tileMapData,$tileMapIndex+$tileMapWidth-2,2));
-			$tilesIndex = $tileMapValue & 0x07FF;
-			$pal = ( $tileMapValue & 0x6000 ) >> 13;
+			$pal        = ( $tileMapValue & 0x6000 ) >> 13;
+			$flipVert   = ( $tileMapValue & 0x1000 ) >> 12;
+			$flipHorz   = ( $tileMapValue & 0x0800 ) >> 11;
+			$tilesIndex = ( $tileMapValue & 0x07FF );
 		    } else {
 			$tilesIndex = ord(substr($tileMapData,$tileMapIndex,1));
 		    }
@@ -320,7 +323,21 @@ sub Tile2Img {
 	    if ( $tilesIndex > $#tiles ) {
 		$value = chr(0x00);
 	    } else {
-		$value = substr($tiles[$tilesIndex],($x%8)/2+($y%8)*4,1);
+		my $x1 = $x;
+		my $y1 = $y;
+		if ( $flipVert ) {
+		    $y1 = ( $y & 0xFFF8 ) | ( 7 - ( $y & 0x0007 ) );
+		}
+		if ( $flipHorz ) {
+		    # remember working on 2x1 regions
+		    $x1 = ( $x & 0xFFF8 ) | ( 6 - ( $x & 0x0006 ) );
+		}
+		$value = substr($tiles[$tilesIndex],($x1%8)/2+($y1%8)*4,1);
+		if ( $flipHorz ) {
+		    # flip the pixels
+		    $value = chr( ( ( ord($value) & 0x0F ) << 4 ) |
+				  ( ( ord($value) & 0xF0 ) >> 4 ) );
+		}
 	    }
 	    if ( $palette->GetPaletteCount() > 1 ) {
 		if ( $paletteMapCinepak ne '' ) {
@@ -335,7 +352,7 @@ sub Tile2Img {
 		if ( $c1 >= $transColorsPerPalette ) {
 		    $c1 |= ($pal<<4);
 		}
-		$value = chr($c0).chr($c1);
+		$value = chr($c1).chr($c0);
 	    }
 	    $filtered .= $value;
 	}
