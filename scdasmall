@@ -27,13 +27,22 @@ use warnings;
 # for those running natively can use short name if assembler is in your path
 # Which($) allows short names for wine/dosbox executables in your path
 
-my $asmx = 'asmx-2.0b5';
+#my $asmx = 'asmx-2.0b5';
+my $asmx = &Which('asmx');
+
+my $z80 = 0;
 
 # set any of the following to '' to disable
-my $asmxbgv = 'asmx-bgv';
+my $asmxbgv = &Which('asmx-bgv');
+
+# 68k only assemblers
 my $asm68k = &Which('asm68k.exe');
 my $snasm68k = &Which('SNASM68K.EXE');
 my $asl = &Which('asl');
+
+# z80 only assemblers
+my $z80asm = &Which('z80asm');
+my $pasmo = &Which('pasmo');
 
 # used for asl post processing
 my $s2p2bin = &Which('s2p2bin');
@@ -48,7 +57,11 @@ $snasm68kShort =~ s/^(.*[\\\/])//g;
 my @files;
 
 foreach my $arg (@ARGV) {
-    if ( $arg =~ /-asm68kopts=(.*)$/ ) {
+    if ( $arg =~ m/^-(68k|68000)$/i ) {
+	$z80 = 0;
+    } elsif ( $arg =~ m/^-z80$/i ) {
+	$z80 = 1;
+    } elsif ( $arg =~ /-asm68kopts=(.*)$/ ) {
 	$asm68kopts = $1;
     } elsif ( $arg =~ /-snasm68kopts=(.*)$/ ) {
 	$snasm68kopts = $1;
@@ -67,34 +80,42 @@ if ( $#files != 0 ) {
 my $asm = $files[0];
 
 # baseline sure still works with original asmx
-system("$asmx -C 68000 -b 0 -e -w -o asmx.bin -- $asm");
+if ( $z80 ) {
+    system("$asmx -C z80 -b 0 -e -w -o asmx.bin -- $asm");
+} else {
+    system("$asmx -C 68000 -b 0 -e -w -o asmx.bin -- $asm");
+}
 
 my $rc0 = 0;
 if ( $asmxbgv ne '' ) {
     # using bgv improvements to asmx that I typically use
-    system("$asmxbgv -pu1 -pa0 -C 68000 -b 0 -e -w -o asmxbgv.bin -- $asm");
-    $rc0 = system("diff asmxbgv.bin asmx.bin");
+    if ( $z80 ) {
+	system("$asmxbgv -pu1 -pa0 -C z80 -b 0 -e -w -o asmxbgv.bin -- $asm");
+    } else {
+	system("$asmxbgv -pu1 -pa0 -C 68000 -b 0 -e -w -o asmxbgv.bin -- $asm");
+    }
+    $rc0 = system("diff asmx.bin asmxbgv.bin");
 }
 
 my $rc1 = 0;
-if ( $asm68k ne '' ) {
+if ( ! $z80 && $asm68k ne '' ) {
     # wine runs fine, so don't need dosbox
     system("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin");
-    $rc1 = system("diff asmxbgv.bin asm68k.bin");
+    $rc1 = system("diff asmx.bin asm68k.bin");
 }
 
 my $rc2 = 0;
-if ( $snasm68k ne '' ) {
+if ( ! $z80 && $snasm68k ne '' ) {
     # wine can't run, so need to make a bat file to run command with options
     # copy to local directory so that local directory is mounted
     system("cp $snasm68k .");
     system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN' > SNASM68K.BAT");
     system("dosbox SNASM68K.BAT -exit");
-    $rc2 = system("diff asmxbgv.bin SNASM68K.BIN");
+    $rc2 = system("diff asmx.bin SNASM68K.BIN");
 }
 
 my $rc3 = 0;
-if ( $asl ne '' ) {
+if ( ! $z80 && $asl ne '' ) {
     if ( open(TMPASM, ">asl.asm") ) {
 	print TMPASM "
 incbin	macro	file
@@ -110,30 +131,48 @@ even	macro
     close TMPASM;
     system("asl -cpu 68000 -xx -c -A asl.asm -o asl.p -shareout asl.h");
     system("s2p2bin asl.p asl.bin asl.h");
-    $rc3 = system("diff asmxbgv.bin asl.bin");
+    $rc3 = system("diff asmx.bin asl.bin");
+}
+
+my $rc4 = 0;
+if ( $z80 && $z80asm ne '' ) {
+    system("z80asm $asm --output=z80asm.bin");
+    $rc4 = system("diff asmx.bin asmx.bin");
+}
+
+my $rc5 = 0;
+if ( $z80 && $pasmo ne '' ) {
+    system("pasmo $asm pasmo.bin");
+    $rc5 = system("diff asmx.bin pasmo.bin");
 }
 
 print "\n";
 
 # see if clean diffs, if so clean up files and report it was clean
-if ( ! $rc0 && ! $rc1 && ! $rc2 && ! $rc3 ) {
+if ( ! $rc0 && ! $rc1 && ! $rc2 && ! $rc3 && ! $rc4 && ! $rc5 ) {
     system("rm asmx.bin");
     if ( $asmxbgv ne '' ) {
 	system("rm asmxbgv.bin");
     }
-    if ( $asm68k ne '' ) {
+    if ( ! $z80 && $asm68k ne '' ) {
 	system("rm asm68k.bin");
     }
-    if ( $snasm68k ne '' ) {
+    if ( ! $z80 && $snasm68k ne '' ) {
 	system("rm $snasm68kShort");
 	system("rm SNASM68K.BAT");
 	system("rm SNASM68K.BIN");
     }
-    if ( $asl ne '' ) {
+    if ( ! $z80 && $asl ne '' ) {
 	system("rm asl.asm");
 	system("rm asl.p");
 	system("rm asl.h");
 	system("rm asl.bin");
+    }
+    if ( $z80 && $z80asm ne '' ) {
+	system("rm z80asm.bin");
+    }
+    if ( $z80 && $pasmo ne '' ) {
+	system("rm pasmo.bin");
     }
     print "All clean\n";
 }
@@ -159,6 +198,8 @@ scdasmall [options] <asmfile>
   ensure several assemblers all have the same binary output for an asmfile
 
 [options]
+  -68k                  specify 68k assembling (default)
+  -z80                  specify z80 assembling
   -asm68kopts=<opts>    opts to pass to asm68k
   -snasm68kopts=<opts>  opts to pass to snasm68k
   -unopt                do not send optimization opts to assemblers

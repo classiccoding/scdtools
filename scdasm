@@ -21,34 +21,53 @@ use strict;
 use warnings;
 
 # asmx-bgv only parameters: -pu1 -pa0 -u -n 
-my $cmd = 'asmx -C 68000 -b 0 -e -w';
+# kept seperated for now in case others are using different assemblers
+my $cmd68k = 'asmx -C 68000 -b 0 -e';
+my $cmdz80 = 'asmx -C z80 -b 0 -e';
 
+my $z80 = 0;
 my $verbosity = 2;
 my $options = '';
+my $warnings = 1;
 
 my @args;
 foreach my $arg (@ARGV) {
-    if ( $arg =~ m/^-v=(\d+)$/i ) {
+    if ( $arg =~ m/^-(68k|68000)$/i ) {
+	$z80 = 0;
+    } elsif ( $arg =~ m/^-z80$/i ) {
+	$z80 = 1;
+    } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
 	$verbosity = $1;
     } elsif ( $arg =~ m/^-options=(.*)$/i ) {
 	$options .= ' '.$1;
+    } elsif ( $arg =~ m/^-nowarnings$/i ) {
+	$warnings = 0;
     } else {
 	push @args, $arg;
     }
 }
 
+if ( $warnings ) {
+    $cmd68k .= " -w";
+    $cmdz80 .= " -w";
+}
+
 if ( $#args == 1 ) {
     my $asm = $args[0];
     my $bin = $args[1];
-    $cmd .= " $options -o $bin -- $asm";
+    $cmd68k .= " $options -o $bin -- $asm";
+    $cmdz80 .= " $options -o $bin -- $asm";
 } elsif ( $#args == 2 ) {
     my $asm = $args[0];
     my $bin = $args[1];
     my $lst = $args[2];
-    $cmd .= " $options -l $lst -o $bin -- $asm";
+    $cmd68k .= " $options -l $lst -o $bin -- $asm";
+    $cmdz80 .= " $options -l $lst -o $bin -- $asm";
 } else {
     &Help();
 }
+
+my $cmd = $z80 ? $cmdz80 : $cmd68k;
 
 # only need to filter STDERR if low verbosity
 if ( $verbosity < 2 ) {
@@ -81,8 +100,11 @@ scdasm [options] <asmfile> <binfile> [lstfile]
   wrapper script for assembling 68k code
 
 [options]
+  -68k                 specify 68k assembling (default)
+  -z80                 specify z80 assembling
   -v=<#>               specify verbosity
   -options=<options>   options to send to assembler
+  -nowarnings          disable assembler warnings
 
 ';
 }
