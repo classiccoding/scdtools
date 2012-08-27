@@ -296,7 +296,6 @@ sub Tile2Img {
 	    if ( $tilesOrderPlane == 2 ) {
 		# TODO undocumented
 		$tilesIndex = ( $tileY & 0xFFFC ) * $w8 + ( $tileX * 4 ) + ( $tileY & 0x0003 );
-
 	    } elsif ( $tilesOrderPlane ) {
 		$tilesIndex = $tileY * $w8 + $tileX;
 	    } else {
@@ -352,7 +351,7 @@ sub Tile2Img {
 		if ( $c1 >= $transColorsPerPalette ) {
 		    $c1 |= ($pal<<4);
 		}
-		$value = chr($c1).chr($c0);
+		$value = chr($c0).chr($c1);
 	    }
 	    $filtered .= $value;
 	}
