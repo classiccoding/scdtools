@@ -1,0 +1,49 @@
+#!/usr/bin/perl
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV != 0 ) {
+    &Help();
+}
+
+my $value = $ARGV[0];
+
+if ( $value =~ m/^\s*w\s*(?:0x|\$|)([0-9A-F]{8})\s*$/ ) {
+    my $value = hex($1);
+    my $code =
+	( ( $value & 0x000000F0) >> ( 4-2) ) |
+	( ( $value & 0xC0000000) >> (30-0) );
+    my $address =
+	( ( $value & 0x00000003) << (14-0) ) |
+	( ( $value & 0x3FFF0000) >> (16-0) );
+    my $type = '?';
+    my $rw = ($code & 0x01) ? 'Write' : 'Read';
+    my $dma = (($code & 0x30) >> 4);
+    if ( ( $code & 0x0E ) == 0 ) {
+	$type = 'VRAM';
+    } elsif ( ( $code & 0x0E ) == 2 ) {
+	$type = 'CRAM';
+    } elsif ( ( $code & 0x0E ) == 4 ) {
+	$type = 'VSRAM';
+    } elsif ( ( $code & 0x0E ) == 8 ) {
+	$type = 'CRAM';
+    }
+    printf("Type: %s, R/W: %s, DMA: %d, Code: %2.2X, Address %4.4X\n",$type,$rw,$dma,$code,$address);
+} else {
+    print "Could not parse $value\n";
+}
+
+sub Help {
+    die '
+scdvdphelp [options]
+
+[description]
+  Help with the VDP.
+
+[options]
+  w0xXXXXXXXX   detail what this VDP write does
+
+';
+}
