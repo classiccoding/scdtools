@@ -100,6 +100,7 @@ if ( $asmxbgv ne '' ) {
 my $rc1 = 0;
 if ( ! $z80 && $asm68k ne '' ) {
     # wine runs fine, so don't need dosbox
+    #print("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin\n");
     system("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin");
     $rc1 = system("diff asmx.bin asm68k.bin");
 }
@@ -109,7 +110,7 @@ if ( ! $z80 && $snasm68k ne '' ) {
     # wine can't run, so need to make a bat file to run command with options
     # copy to local directory so that local directory is mounted
     system("cp $snasm68k .");
-    system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN' > SNASM68K.BAT");
+    system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN > SNASM68K.OUT' > SNASM68K.BAT");
     system("dosbox SNASM68K.BAT -exit");
     $rc2 = system("diff asmx.bin SNASM68K.BIN");
 }

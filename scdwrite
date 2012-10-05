@@ -92,12 +92,13 @@ if ( $#bins == 0 && $#cues == 0 ) {
 
     if ( $useWav ) {
 	foreach my $mp3 ((<*.mp3>,<*.MP3>)) {
-	    my $wav = $mp3;
-	    $wav =~ s/\.mp3$/.wav/;
-	    if ( ! -e $wav ) {
-		system("mpg123 -w \"$wav\" \"$mp3\"");
+	    my $out = $mp3;
+	    $out =~ s/\.mp3$/.wav/;
+	    if ( ! -e $out ) {
+		#system("mpg123 --wav \"$out\" \"$mp3\"");
+		system("ffmpeg -i \"$mp3\" -vn -acodec pcm_s16le -ar 44100 -ac 2 -f wav \"$out\"");
 		if ( $deleteCreatedFiles ) {
-		    push @filesToDelete, $wav;
+		    push @filesToDelete, $out;
 		}
 	    }
 	}

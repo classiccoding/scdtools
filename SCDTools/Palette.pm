@@ -167,8 +167,12 @@ sub ParseArg {
  	$self->{'fileOutputBin'} = $2;
     } elsif ( $arg =~ /^-pal(ette)?file=(.+)$/i ) {
  	$self->{'fileInput'} = $2;
+    } elsif ( $arg =~ /^-pal(ette)?byteoffset=0x([0-9A-F]+)/i ) {
+ 	$self->{'fileInputOffset'} = hex($2);
     } elsif ( $arg =~ /^-pal(ette)?byteoffset=(\d+)/i ) {
  	$self->{'fileInputOffset'} = $2;
+    } elsif ( $arg =~ /^-pal(ette)?offset=(0x[0-9A-F]+)$/i ) {
+ 	$self->{'fileInputOffset'} = 32 * hex($2);
     } elsif ( $arg =~ /^-pal(ette)?offset=(\d+)$/i ) {
  	$self->{'fileInputOffset'} = 32 * $2;
     } elsif ( $arg =~ /^-pal(ette)?count=(\d+)$/i ) {
