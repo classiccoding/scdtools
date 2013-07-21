@@ -33,7 +33,9 @@
 use strict;
 use warnings;
 
-
+if ( $#ARGV != 0 ) {
+    &Help();
+}
 
 my $gstFile = $ARGV[0];
 
