@@ -1,0 +1,161 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2012 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# Used information from the following source
+#
+# SEGA GENESIS EMULATOR SAVE STATE REFERENCE
+# First Edition (April 11, 2001)
+# Bart Trzynadlowski
+# http://emu-docs.org/Genesis/File%20Formats/gensave.txt
+#
+# 0x00000-0x00002     Signature: "GST"
+# 0x000FA-0x00112     VDP registers (0-23, 1 byte each)
+# 0x00112-0x00191     CRAM (little endian)
+# 0x00192-0x001E1     VSRAM
+# 0x12478-0x22477     VRAM
+###############################################################################
+
+use strict;
+use warnings;
+
+
+
+my $gstFile = $ARGV[0];
+
+my $gstFileLength = -s $gstFile;
+
+if ( $gstFileLength < 0x22477 ) {
+    die "GST file is not long enough to have VDP information\n";
+}
+
+open(GST, $gstFile) or die "Could not read GST file: $gstFile\n";
+binmode GST;
+my $gstData = '';
+if ( read(GST, $gstData, $gstFileLength) != $gstFileLength ) {
+    die "Bad data from GST file: $gstFile\n";
+}
+close GST;
+
+
+if ( substr($gstData,0,3) ne 'GST' ) {
+    die "Bad GST header: $gstFile\n";
+}
+
+my @vdpRegs;
+for ( my $vdpReg = 0; $vdpReg < 24; $vdpReg++ ) {
+    $vdpRegs[$vdpReg] = ord(substr($gstData,0x000FA+$vdpReg,1));
+}
+
+# swap bytes to convert from little endian to big endian
+my $cram = substr($gstData,0x00112,0x80);
+for ( my $cramIndex = 0; $cramIndex < 0x80; $cramIndex += 2 ) {
+    substr($cram,$cramIndex,2) = pack("n",unpack("v",substr($cram,$cramIndex,2)));
+}
+
+my $vsram = substr($gstData,0x00192,0x50);
+
+my $vram = substr($gstData,0x12478,0x10000);
+
+my $ram68k = substr($gstData,0x02478,0x10000);
+
+my $ramz80 = substr($gstData,0x00474,0x2000);
+
+open(CRAM, ">cram.bin");
+binmode CRAM;
+print CRAM $cram;
+close CRAM;
+
+open(VSRAM, ">vsram.bin");
+binmode VSRAM;
+print VSRAM $vsram;
+close VSRAM;
+
+open(VRAM, ">vram.bin");
+binmode VRAM;
+print VRAM $vram;
+close VRAM;
+
+open(RAM68K, ">ram68k.bin");
+binmode RAM68K;
+print RAM68K $ram68k;
+close RAM68K;
+
+open(RAMZ80, ">ramz80.bin");
+binmode RAMZ80;
+print RAMZ80 $ramz80;
+close RAMZ80;
+
+my $scrollA = ( $vdpRegs[0x02] << 10 ) & 0xE000;
+my $scrollB = ( $vdpRegs[0x04] << 13 ) & 0xE000;
+my $spriteTableStart = ( $vdpRegs[0x05] <<  9 ) & 0xFC00;
+my $vsz = ( ( $vdpRegs[0x10] >> 4 ) & 0x03 );
+my $hsz = ( ( $vdpRegs[0x10]      ) & 0x03 );
+
+my $rs = ( ( $vdpRegs[0x0C] >> 7 ) & 1 ) | ( ( $vdpRegs[0x0C] << 1 ) & 1 );
+
+my $widthShown = 320;
+if ( $rs == 0 ) {
+    $widthShown = 256;
+}
+
+my $width = 32*8;
+if ( $hsz == 1 ) {
+    $width = 64*8;
+} elsif ( $hsz == 3 ) {
+    $width = 128*8;
+}
+
+my $height = 32*8;
+if ( $vsz == 1 ) {
+    $height = 64*8;
+} elsif ( $vsz == 3 ) {
+    $height = 128*8;
+}
+
+system("scdtile2img -width=$width -height=$height -palfile=cram.bin -palcount=4 -tilesfile=vram.bin -mapfile=vram.bin -mapbyteoffset=$scrollA -mapwidth=2 -pngcrush -imgfile=scrolla.png");
+
+# TODO window
+
+system("scdtile2img -width=$width -height=$height -palfile=cram.bin -palcount=4 -tilesfile=vram.bin -mapfile=vram.bin -mapbyteoffset=$scrollB -mapwidth=2 -pngcrush -imgfile=scrollb.png");
+
+# 640 table size
+for ( my $spriteIndex = 0; $spriteIndex < 80; $spriteIndex++ ) {
+    # TODO flipping support?
+    # TODO put all sprites on one image in their specific location
+    my $spriteData = substr($vram,$spriteTableStart+$spriteIndex*8,8);
+    my $spriteDataWord1 = unpack("n",substr($spriteData,2,2));
+    my $spriteDataWord2 = unpack("n",substr($spriteData,4,2));
+    my $width      = ( ( $spriteDataWord1 >> 10 ) & 0x0003 ) * 8 + 8;
+    my $height     = ( ( $spriteDataWord1 >>  8 ) & 0x0003 ) * 8 + 8;
+    my $tileOffset = ( ( $spriteDataWord2       ) & 0x07FF );
+    my $palOffset  = ( ( $spriteDataWord2 >> 13 ) & 0x0003 );
+    my $imgFile = sprintf("sprite%2.2X.png",$spriteIndex);
+    system("scdtile2img -width=$width -height=$height -palfile=cram.bin -paloffset=$palOffset -tilesfile=vram.bin -tilesoffset=$tileOffset -sprite -pngcrush -imgfile=$imgFile");
+}
+
+
+sub Help {
+    die '
+scdgstvdpextract <gstfile>
+
+[description]
+  Extracts various parts of the VDP and makes images out of them to easily
+  see what is going on.
+
+';
+}
