@@ -1,0 +1,231 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2012 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# Used Genesis game genie information located at:
+#   Game Genie Encryption Schemes by Lazy Bastard
+#   http://gamehacking.org/?s=faqs&id=114
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+my $mapAV2GG = 'ABCDEFGHJKLMNPRSTVWXYZ0123456789';
+
+my %mapGG2AV = (
+    'A' => 0b00000,
+    'B' => 0b00001,
+    'C' => 0b00010,
+    'D' => 0b00011,
+    'E' => 0b00100,
+    'F' => 0b00101,
+    'G' => 0b00110,
+    'H' => 0b00111,
+    'J' => 0b01000,
+    'K' => 0b01001,
+    'L' => 0b01010,
+    'M' => 0b01011,
+    'N' => 0b01100,
+    'P' => 0b01101,
+    'R' => 0b01110,
+    'S' => 0b01111,
+    'T' => 0b10000,
+    'V' => 0b10001,
+    'W' => 0b10010,
+    'X' => 0b10011,
+    'Y' => 0b10100,
+    'Z' => 0b10101,
+    '0' => 0b10110,
+    '1' => 0b10111,
+    '2' => 0b11000,
+    '3' => 0b11001,
+    '4' => 0b11010,
+    '5' => 0b11011,
+    '6' => 0b11100,
+    '7' => 0b11101,
+    '8' => 0b11110,
+    '9' => 0b11111
+    );
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^\s*([$mapAV2GG]{4})\s*-\s*([$mapAV2GG]{4})\s*$/ ) {
+	# convert game genie code to address/value
+	my $gg0 = $1;
+	my $gg1 = $2;
+	my @chars;
+	for ( my $i = 0; $i < 4; $i++ ) {
+	    $chars[0+$i] = $mapGG2AV{substr($gg0,$i,1)};
+	    $chars[4+$i] = $mapGG2AV{substr($gg1,$i,1)};
+	}
+	#     0     1     2     3     - 4     5     6     7
+	# GG: ijklm nopIJ KLMNO PABCD - EFGHd efgha bcQRS TUVWX
+	#     0        1        2        : 3        4
+	# AV: ABCDEFGH IJKLMNOP QRSTUVWX : abcdefgh ijklmnop
+	my @bytes;
+	$bytes[0] =
+	    ( ( ( $chars[3] >> 3 ) & 1 ) << 7 ) |
+	    ( ( ( $chars[3] >> 2 ) & 1 ) << 6 ) |
+	    ( ( ( $chars[3] >> 1 ) & 1 ) << 5 ) |
+	    ( ( ( $chars[3] >> 0 ) & 1 ) << 4 ) |
+	    ( ( ( $chars[4] >> 4 ) & 1 ) << 3 ) |
+	    ( ( ( $chars[4] >> 3 ) & 1 ) << 2 ) |
+	    ( ( ( $chars[4] >> 2 ) & 1 ) << 1 ) |
+	    ( ( ( $chars[4] >> 1 ) & 1 ) << 0 );
+	$bytes[1] =
+	    ( ( ( $chars[1] >> 1 ) & 1 ) << 7 ) |
+	    ( ( ( $chars[1] >> 0 ) & 1 ) << 6 ) |
+	    ( ( ( $chars[2] >> 4 ) & 1 ) << 5 ) |
+	    ( ( ( $chars[2] >> 3 ) & 1 ) << 4 ) |
+	    ( ( ( $chars[2] >> 2 ) & 1 ) << 3 ) |
+	    ( ( ( $chars[2] >> 1 ) & 1 ) << 2 ) |
+	    ( ( ( $chars[2] >> 0 ) & 1 ) << 1 ) |
+	    ( ( ( $chars[3] >> 4 ) & 1 ) << 0 );
+	$bytes[2] =
+	    ( ( ( $chars[6] >> 2 ) & 1 ) << 7 ) |
+	    ( ( ( $chars[6] >> 1 ) & 1 ) << 6 ) |
+	    ( ( ( $chars[6] >> 0 ) & 1 ) << 5 ) |
+	    ( ( ( $chars[7] >> 4 ) & 1 ) << 4 ) |
+	    ( ( ( $chars[7] >> 3 ) & 1 ) << 3 ) |
+	    ( ( ( $chars[7] >> 2 ) & 1 ) << 2 ) |
+	    ( ( ( $chars[7] >> 1 ) & 1 ) << 1 ) |
+	    ( ( ( $chars[7] >> 0 ) & 1 ) << 0 );
+	$bytes[3] =
+	    ( ( ( $chars[5] >> 0 ) & 1 ) << 7 ) |
+	    ( ( ( $chars[6] >> 4 ) & 1 ) << 6 ) |
+	    ( ( ( $chars[6] >> 3 ) & 1 ) << 5 ) |
+	    ( ( ( $chars[4] >> 0 ) & 1 ) << 4 ) |
+	    ( ( ( $chars[5] >> 4 ) & 1 ) << 3 ) |
+	    ( ( ( $chars[5] >> 3 ) & 1 ) << 2 ) |
+	    ( ( ( $chars[5] >> 2 ) & 1 ) << 1 ) |
+	    ( ( ( $chars[5] >> 1 ) & 1 ) << 0 );
+	$bytes[4] =
+	    ( ( ( $chars[0] >> 4 ) & 1 ) << 7 ) |
+	    ( ( ( $chars[0] >> 3 ) & 1 ) << 6 ) |
+	    ( ( ( $chars[0] >> 2 ) & 1 ) << 5 ) |
+	    ( ( ( $chars[0] >> 1 ) & 1 ) << 4 ) |
+	    ( ( ( $chars[0] >> 0 ) & 1 ) << 3 ) |
+	    ( ( ( $chars[1] >> 4 ) & 1 ) << 2 ) |
+	    ( ( ( $chars[1] >> 3 ) & 1 ) << 1 ) |
+	    ( ( ( $chars[1] >> 2 ) & 1 ) << 0 );
+
+	my $addressValue =
+	    ( $bytes[0] << 16 ) |
+	    ( $bytes[1] <<  8 ) |
+	    ( $bytes[2] <<  0 );
+	my $valueValue =
+	    ( $bytes[3] <<  8 ) |
+	    ( $bytes[4] <<  0 );
+	my $address = sprintf("%6.6X",$addressValue);
+	my $value = sprintf("%4.4X",$valueValue);
+	print "$gg0-$gg1 <=> $address:$value\n";
+    } elsif ( $arg =~ m/^\s*([0-9A-F]{6})\s*:\s*([0-9A-F]{4})\s*$/ ) {
+	# convert address/value to game genie code
+	my $address = $1;
+	my $value = $2;
+	my @bytes;
+	$bytes[0] = hex(substr($address,0,2));
+	$bytes[1] = hex(substr($address,2,2));
+	$bytes[2] = hex(substr($address,4,2));
+	$bytes[3] = hex(substr($value,0,2));
+	$bytes[4] = hex(substr($value,2,2));
+	#     0        1        2        : 3        4
+	# AV: ABCDEFGH IJKLMNOP QRSTUVWX : abcdefgh ijklmnop
+	#     0     1     2     3     - 4     5     6     7
+	# GG: ijklm nopIJ KLMNO PABCD - EFGHd efgha bcQRS TUVWX
+	my @chars;
+	$chars[0] =
+	    ( ( ( $bytes[4] >> 7 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[4] >> 6 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[4] >> 5 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[4] >> 4 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[4] >> 3 ) & 1 ) << 0 );
+	$chars[1] =
+	    ( ( ( $bytes[4] >> 2 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[4] >> 1 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[4] >> 0 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[1] >> 7 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[1] >> 6 ) & 1 ) << 0 );
+	$chars[2] =
+	    ( ( ( $bytes[1] >> 5 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[1] >> 4 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[1] >> 3 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[1] >> 2 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[1] >> 1 ) & 1 ) << 0 );
+	$chars[3] =
+	    ( ( ( $bytes[1] >> 0 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[0] >> 7 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[0] >> 6 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[0] >> 5 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[0] >> 4 ) & 1 ) << 0 );
+	$chars[4] =
+	    ( ( ( $bytes[0] >> 3 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[0] >> 2 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[0] >> 1 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[0] >> 0 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[3] >> 4 ) & 1 ) << 0 );
+	$chars[5] =
+	    ( ( ( $bytes[3] >> 3 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[3] >> 2 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[3] >> 1 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[3] >> 0 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[3] >> 7 ) & 1 ) << 0 );
+	$chars[6] =
+	    ( ( ( $bytes[3] >> 6 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[3] >> 5 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[2] >> 7 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[2] >> 6 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[2] >> 5 ) & 1 ) << 0 );
+	$chars[7] =
+	    ( ( ( $bytes[2] >> 4 ) & 1 ) << 4 ) |
+	    ( ( ( $bytes[2] >> 3 ) & 1 ) << 3 ) |
+	    ( ( ( $bytes[2] >> 2 ) & 1 ) << 2 ) |
+	    ( ( ( $bytes[2] >> 1 ) & 1 ) << 1 ) |
+	    ( ( ( $bytes[2] >> 0 ) & 1 ) << 0 );
+	my $gg0 =
+	    substr($mapAV2GG,$chars[0],1) .
+	    substr($mapAV2GG,$chars[1],1) .
+	    substr($mapAV2GG,$chars[2],1) .
+	    substr($mapAV2GG,$chars[3],1);
+	my $gg1 =
+	    substr($mapAV2GG,$chars[4],1) .
+	    substr($mapAV2GG,$chars[5],1) .
+	    substr($mapAV2GG,$chars[6],1) .
+	    substr($mapAV2GG,$chars[7],1);
+	print "$gg0-$gg1 <=> $address:$value\n";
+    } else {
+	print STDERR "Could not parse: $arg\n";
+    }
+}
+
+
+sub Help {
+    die '
+scdgamegenie [codes]
+
+[description]
+  Convert to and from game genie code format.
+
+[codes]
+  XXXX-XXXX        convert game genie code to address/value
+  XXXXXX:XXXX      convert address/value to game genie code
+
+';
+}
