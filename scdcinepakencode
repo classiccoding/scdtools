@@ -113,9 +113,13 @@ my @pcmFrameFiles;
 my $imgPaletteLast = '';
 my $imgPaletteMapLast = '';
 
+my $pcmFileSize = 0;
 if ( $pcmFile ne '' ) {
     $pcmFileSize = -s $pcmFile;
+}
 
+# empty pcm file means no audio
+if ( $pcmFileSize > 0 ) {
     open( PCM, '<'.$pcmFile ) or die "Cannot read $pcmFile\n";
 
     for ( my $pcmFileIndex = 0; $pcmFileIndex < $pcmFileSize; $pcmFileIndex += $pcmFrameSize ) {

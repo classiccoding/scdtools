@@ -49,6 +49,8 @@ if ( $#files != 1 ) {
 my $waveFile = $ARGV[0];
 my $pcmFile = $ARGV[1];
 
+my $waveFileSize = -s $waveFile;
+
 if ( ! open( WAVE, '<'.$waveFile ) ) {
     print STDERR "Could not open $waveFile\n";
     exit 1;
@@ -60,6 +62,13 @@ if ( ! open( PCM, '>'.$pcmFile ) ) {
     exit 1;
 }
 binmode PCM;
+
+# if empty wave file then create empty pcm file and exit
+if ( $waveFileSize == 0 ) {
+    close WAVE;
+    close PCM;
+    exit;
+}
 
 my $riffID = '';
 if ( read(WAVE,$riffID,4) != 4 ) {
