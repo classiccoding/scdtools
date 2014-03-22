@@ -1,0 +1,531 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2014 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# Used information from the following source
+#
+# SEGA GENESIS EMULATOR SAVE STATE REFERENCE
+# First Edition (April 11, 2001)
+# Bart Trzynadlowski
+# http://emu-docs.org/Genesis/File%20Formats/gensave.txt
+#
+# 0x00000-0x00002     Signature: "GST"
+# 0x000FA-0x00112     VDP registers (0-23, 1 byte each)
+# 0x00112-0x00191     CRAM (little endian)
+# 0x00192-0x001E1     VSRAM
+# 0x12478-0x22477     VRAM
+#
+# Copied comments from the following source
+# http://hackipedia.org/File%20formats/Emulator/Sega%20Genesis/Gens/Genecyst%20save%20file%20format.utf-8.txt
+#
+# GST genecyst save file
+#
+# Range Size Description
+# ----------- ----- -----------
+# 00000-00002 3 "GST"
+# 00006-00007 2 "\xE0\x40"
+# 000FA-00112 24 VDP registers
+# 00112-00191 128 Color RAM
+# 00192-001E1 80 Vertical scroll RAM
+# 001E4-003E3 512 YM2612 registers
+# 00474-02473 8192 Z80 RAM
+# 02478-12477 65536 68K RAM
+# 12478-22477 65536 Video RAM
+#
+# main 68000 registers
+# --------------------
+#
+# 00080-0009F : D0-D7
+# 000A0-000BF : A0-A7
+# 000C8 : PC
+# 000D0 : SR
+# 000D2 : USP
+# 000D6 : SSP
+#
+# Z80 registers
+# -------------
+#
+# 00404 : AF
+# 00408 : BC
+# 0040C : DE
+# 00410 : HL
+# 00414 : IX
+# 00418 : IY
+# 0041C : PC
+# 00420 : SP
+# 00424 : AF'
+# 00428 : BC'
+# 0042C : DE'
+# 00430 : HL'
+#
+# 00434 : I
+# 00435 : Unknow
+# 00436 : IFF1 = IFF2
+# 00437 : Unknow
+#
+# The 'R' register is not supported.
+#
+# Z80 State
+# ---------
+#
+# 00438 : Z80 RESET
+# 00439 : Z80 BUSREQ
+# 0043A : Unknow
+# 0043B : Unknow
+#
+# 0043C : Z80 BANK (DWORD)
+#
+# Gens and Kega ADD
+# -----------------
+#
+# 00040 : last VDP Control data written (DWORD)
+# 00044 : second write flag (1 for second write)
+# 00045 : DMA Fill flag (1 mean next data write will cause a DMA fill)
+# 00048 : VDP write address (DWORD)
+#
+# 00050 : Version (Genecyst=0 ; Kega=5 ; Gens=5)
+# 00051 : Emulator ID (Genecyst=0 ; Kega=0 ; Gens=1)
+# 00052 : System ID (Genesis=0 ; SegaCD=1 ; 32X=2 ; SegaCD32X=3)
+#
+# 00060-00070 : PSG registers (WORD).
+#
+#
+# SEGA CD
+# -------
+#
+# +00000-00FFF : Gate array & sub 68K
+# +01000-80FFF : Prg RAM
+# +81000-C0FFF : Word RAM (2M mode arrangement)
+# +C1000-D0FFF : PCM RAM
+# +D1000-DFFFF : CDD & CDC data (16 kB cache include)
+#
+# 32X
+# ---
+#
+# main SH2
+# --------
+#
+# +00000-00FFF : cache
+# +01000-011FF : IO registers
+# +01200-0123F : R0-R15
+# +01240 : SR
+# +01244 : GBR
+# +01248 : VBR
+# +0124C : MACL
+# +01250 : MACH
+# +01254 : PR
+# +01258 : PC
+# +0125C : State
+#
+# sub SH2
+# -------
+#
+# +01400-023FF : cache
+# +02400-025FF : IO registers
+# +02600-0263F : R0-R15
+# +02640 : SR
+# +02644 : GBR
+# +02648 : VBR
+# +0264C : MACL
+# +02650 : MACH
+# +02654 : PR
+# +02658 : PC
+# +0265C : State
+#
+# others
+# ------
+# // Fix 32X save state :
+# // enregistrer correctement les registres systèmes ...
+#
+# +02700 : ADEN bit (bit 0)
+# +02701 : FM bit (bit 7)
+# +02702 : Master SH2 INT mask register
+# +02703 : Slave SH2 INT mask register
+# +02704 : 68000 32X rom bank register
+# +02705 : RV (Rom to VRAM DMA allowed) bit (bit 0)
+# +02710-0273F : FIFO stuff (not yet done)
+# +02740-0274F : 32X communication buffer
+# +02750-02759 : PWM registers
+# +02760-0276F : 32X VDP registers
+# +02800-029FF : 32X palette
+# +02A00-429FF : SDRAM
+# +42A00-829FF : FB1 & FB2
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+# specific extractions
+use constant EXTRACT_CRAM       => 0x00000001;
+use constant EXTRACT_VSRAM      => 0x00000002;
+use constant EXTRACT_VRAM       => 0x00000004;
+use constant EXTRACT_RAM68K     => 0x00000010;
+use constant EXTRACT_RAMZ80     => 0x00000100;
+use constant EXTRACT_RAMPROGRAM => 0x00001000;
+use constant EXTRACT_RAMWORD    => 0x00002000;
+use constant EXTRACT_RAMPCM     => 0x00004000;
+# combinations of extracttions
+use constant EXTRACT_NONE       => 0x00000000;
+use constant EXTRACT_ALL        => 0xFFFFFFFF;
+use constant EXTRACT_VDP        => 0x0000000F;
+use constant EXTRACT_GENESIS    => 0x00000FFF;
+use constant EXTRACT_SEGACD     => 0x0000F000;
+use constant EXTRACT_32X        => 0x000F0000;
+
+my $extractSpecified = EXTRACT_NONE;
+my $png = 0;
+my $pngcrush = 0;
+my $composite = 0;
+
+my @gstFiles;
+
+# parse args
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-all$/i ) {
+	$extractSpecified |= EXTRACT_ALL;
+    } elsif ( $arg =~ /^-(genesis|megadrive)$/ ) {
+	$extractSpecified |= EXTRACT_GENESIS;
+    } elsif ( $arg =~ /^-(segacd|megacd)$/ ) {
+	$extractSpecified |= EXTRACT_SEGACD;
+    } elsif ( $arg =~ /^-32x$/ ) {
+	$extractSpecified |= EXTRACT_32X;
+    } elsif ( $arg =~ /^-vdp$/ ) {
+	$extractSpecified |= EXTRACT_VDP;
+    } elsif ( $arg =~ /^-cram$/i ) {
+	$extractSpecified |= EXTRACT_CRAM;
+    } elsif ( $arg =~ /^-vsram$/i ) {
+	$extractSpecified |= EXTRACT_VSRAM;
+    } elsif ( $arg =~ /^-vram$/i ) {
+	$extractSpecified |= EXTRACT_VRAM;
+    } elsif ( $arg =~ /^-ram68k$/i ) {
+	$extractSpecified |= EXTRACT_RAM68K;
+    } elsif ( $arg =~ /^-ramz80$/i ) {
+	$extractSpecified |= EXTRACT_RAMZ80;
+    } elsif ( $arg =~ /^-png$/i ) {
+	$png = 1;
+	$extractSpecified |= EXTRACT_VDP;
+    } elsif ( $arg =~ /^-pngcrush$/i ) {
+	$pngcrush = 1;
+	$png = 1;
+	$extractSpecified |= EXTRACT_VDP;
+    } elsif ( $arg =~ /^-composite$/i ) {
+	$composite = 1;
+	$png = 1;
+	$extractSpecified |= EXTRACT_VDP;
+    } elsif ( -e $arg ) {
+	push @gstFiles, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( $extractSpecified == EXTRACT_NONE ) {
+    $extractSpecified |= EXTRACT_ALL;
+}
+
+my $pngcrushOption = $pngcrush ? '-pngcrush' : '';
+
+if ( $#gstFiles < 0 ) {
+    die "No gst files specified\n";
+}
+
+foreach my $gstFile (@gstFiles) {
+    my $gstFileLength = -s $gstFile;
+
+    my $outPrefix = $gstFile;
+    $outPrefix =~ s/\.(gs[t0-9])$/_${1}_/i;
+
+    if ( $gstFileLength < 0x22477 ) {
+	die "GST file is not long enough to have VDP information\n";
+    }
+
+    open(GST, $gstFile) or die "Could not read GST file: $gstFile\n";
+    binmode GST;
+    my $gstData = '';
+    if ( read(GST, $gstData, $gstFileLength) != $gstFileLength ) {
+	die "Bad data from GST file: $gstFile\n";
+    }
+    close GST;
+
+    if ( substr($gstData,0,3) ne 'GST' ) {
+	die "Bad GST header: $gstFile\n";
+    }
+
+    # 00052 : System ID (Genesis=0 ; SegaCD=1 ; 32X=2 ; SegaCD32X=3)
+    my $system = ord(substr($gstData,0x00052,1));
+    my $gstOffsetSegaCD = 0x22478;
+    my $gstOffset32X = 0x22478;
+
+    # reduce extractSpecified to extract based on system defined in gst
+    my $extract = $extractSpecified & EXTRACT_GENESIS;
+    if ( $system & 0x01 ) {
+	$extract |= $extractSpecified & EXTRACT_SEGACD;
+	# TODO assumes sega cd is before 32x part, not clearly specified
+	$gstOffset32X += 0xE0000;
+    }
+    if ( $system & 0x02 ) {
+	$extract |= $extractSpecified & EXTRACT_32X;
+    }
+
+    if ( $extract & EXTRACT_CRAM ) {
+	# swap bytes to convert from little endian to big endian
+	my $cram = &ByteSwapWords(substr($gstData,0x00112,0x80));
+	open(CRAM, ">${outPrefix}cram.bin");
+	binmode CRAM;
+	print CRAM $cram;
+	close CRAM;
+    }
+
+    if ( $extract & EXTRACT_VSRAM ) {
+	my $vsram = substr($gstData,0x00192,0x50);
+	open(VSRAM, ">${outPrefix}vsram.bin");
+	binmode VSRAM;
+	print VSRAM $vsram;
+	close VSRAM;
+    }
+
+    my $vram = substr($gstData,0x12478,0x10000);
+    if ( $extract & EXTRACT_VRAM ) {
+	open(VRAM, ">${outPrefix}vram.bin");
+	binmode VRAM;
+	print VRAM $vram;
+	close VRAM;
+    }
+
+    if ( $extract & EXTRACT_RAM68K ) {
+	my $ram68k = substr($gstData,0x02478,0x10000);
+	open(RAM68K, ">${outPrefix}ram68k.bin");
+	binmode RAM68K;
+	print RAM68K $ram68k;
+	close RAM68K;
+    }
+
+    if ( $extract & EXTRACT_RAMZ80 ) {
+	my $ramz80 = substr($gstData,0x00474,0x2000);
+	open(RAMZ80, ">${outPrefix}ramz80.bin");
+	binmode RAMZ80;
+	print RAMZ80 $ramz80;
+	close RAMZ80;
+    }
+
+    if ( $png ) {
+	my @vdpRegs;
+	for ( my $vdpReg = 0; $vdpReg < 24; $vdpReg++ ) {
+	    $vdpRegs[$vdpReg] = ord(substr($gstData,0x000FA+$vdpReg,1));
+	}
+
+	my $vsz = ( ( $vdpRegs[0x10] >> 4 ) & 0x03 );
+	my $hsz = ( ( $vdpRegs[0x10]      ) & 0x03 );
+
+	my $rs = ( ( $vdpRegs[0x0C] >> 7 ) & 1 ) | ( ( $vdpRegs[0x0C] << 1 ) & 1 );
+
+	my $hscr = ( $vdpRegs[0x0B] & 0x03 );
+
+	# TODO support hscroll
+	print "TODO HSCR $hscr\n";
+
+	my $widthShown = 320;
+	if ( $rs == 0 ) {
+	    $widthShown = 256;
+	}
+
+	my $width = 32*8;
+	if ( $hsz == 1 ) {
+	    $width = 64*8;
+	} elsif ( $hsz == 3 ) {
+	    $width = 128*8;
+	}
+
+	my $heightShown = 32*8;
+
+	my $height = 32*8;
+	if ( $vsz == 1 ) {
+	    $height = 64*8;
+	} elsif ( $vsz == 3 ) {
+	    $height = 128*8;
+	}
+
+	my $scrollA = ( $vdpRegs[0x02] << 10 ) & 0xE000;
+	my $window = ( $vdpRegs[0x03] << 10 ) & 0xF800;
+	if ( $widthShown == 320 ) {
+	    # 40 cell mode A11 zeroed
+	    $window &= 0xF000;
+	}
+	my $scrollB = ( $vdpRegs[0x04] << 13 ) & 0xE000;
+	my $spriteTableStart = ( $vdpRegs[0x05] <<  9 ) & 0xFE00;
+	if ( $widthShown == 320 ) {
+	    # 40 cell mode A09 zeroed
+	    $spriteTableStart &= 0xFC00;
+	}
+
+	my $windowWidth  = $widthShown;
+	my $windowHeight = ( $vdpRegs[0x12] & 0x1F ) * 8;
+	if ( $vdpRegs[0x12] & 0x80 ) {
+	    $windowHeight = $heightShown - $windowHeight;
+	}
+
+	my $windowEnabled = ( $windowWidth && $windowHeight );
+
+	my $backdrop = ( $vdpRegs[0x07] ) & 0x3F;
+
+	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrolla_low.png");
+	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrolla_high.png");
+
+	if ( $windowEnabled ) {
+	    system("scdtile2img -width=$windowWidth -height=$windowHeight -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=low  -imgfile=${outPrefix}window_low.png");
+	    system("scdtile2img -width=$windowWidth -height=$windowHeight -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=high  -imgfile=${outPrefix}window_high.png");
+	}
+
+	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrollb_low.png");
+	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrollb_high.png");
+
+	# 640 table size
+	my @spriteTable;
+	for ( my $spriteIndex = 0; $spriteIndex < 80; $spriteIndex++ ) {
+	    # TODO put all sprites on one image in their specific location
+	    my $spriteData = substr($vram,$spriteTableStart+$spriteIndex*8,8);
+	    my $spriteDataWord0 = unpack("n",substr($spriteData,0,2));
+	    my $spriteDataWord1 = unpack("n",substr($spriteData,2,2));
+	    my $spriteDataWord2 = unpack("n",substr($spriteData,4,2));
+	    my $spriteDataWord3 = unpack("n",substr($spriteData,6,2));
+	    my $y          = ( ( $spriteDataWord0       ) & 0x03FF );
+	    my $width      = ( ( $spriteDataWord1 >> 10 ) & 0x0003 ) * 8 + 8;
+	    my $height     = ( ( $spriteDataWord1 >>  8 ) & 0x0003 ) * 8 + 8;
+	    my $link       = ( ( $spriteDataWord1       ) & 0x007F );
+	    my $priority   = ( ( $spriteDataWord2 >> 15 ) & 0x0001 );
+	    my $palOffset  = ( ( $spriteDataWord2 >> 13 ) & 0x0003 );
+	    my $flipVert   = ( ( $spriteDataWord2 >> 12 ) & 0x0001 );
+	    my $flipHorz   = ( ( $spriteDataWord2 >> 11 ) & 0x0001 );
+	    my $tileOffset = ( ( $spriteDataWord2       ) & 0x07FF );
+	    my $x          = ( ( $spriteDataWord3       ) & 0x03FF );
+	    my $imgFile = sprintf("sprite%2.2X.png",$spriteIndex);
+	    my $flipVertOption = $flipVert ? '-flipvert' : '';
+	    my $flipHorzOption = $flipHorz ? '-fliphorz' : '';
+	    $spriteTable[$spriteIndex]{'convert'} = "-page +$x+$y ${outPrefix}$imgFile";
+	    $spriteTable[$spriteIndex]{'priority'} = $priority;
+	    $spriteTable[$spriteIndex]{'link'} = $link;
+	    $spriteTable[$spriteIndex]{'visited'} = 0;
+	    system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -paloffset=$palOffset -tilesfile=${outPrefix}vram.bin -tilesoffset=$tileOffset -sprite $flipVertOption $flipHorzOption $pngcrushOption -imgfile=${outPrefix}$imgFile");
+	}
+
+	my $convertSpriteLow = '';
+	my $convertSpriteHigh = '';
+	my $spriteIndex = 0;
+	do {
+	    if ( $spriteIndex > 80 ) {
+		print STDERR "Appears to be an invalid sprite link index: $spriteIndex\n";
+		exit;
+	    }
+	    if ( $spriteTable[$spriteIndex]{'visited'} ) {
+		print STDERR "Sprite table has infinite loop\n";
+		exit;
+	    }
+	    $spriteTable[$spriteIndex]{'visited'} = 1;
+	    my $convert = $spriteTable[$spriteIndex]{'convert'};
+	    my $priority = $spriteTable[$spriteIndex]{'priority'};
+	    if ( $priority ) {
+		$convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
+	    } else {
+		$convertSpriteLow = $convert . ' ' . $convertSpriteLow;
+	    }
+	    $spriteIndex = $spriteTable[$spriteIndex]{'link'};
+	} while ($spriteIndex > 0);
+	
+	my $w1 = $width + 128;
+	my $h1 = $height + 128;
+	if ( $w1 < 512+32 ) {
+	    $w1 = 512+32;
+	}
+	if ( $h1 < 512+32 ) {
+	    $h1 = 512+32;
+	}
+
+	print $backdrop."\n";
+	system("scdtile2img -width=$width -height=$height -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 -imgfile=${outPrefix}backdrop.png");
+
+	if ( $composite ) {
+	    # TODO scrolling
+	    # TODO assumes black background
+	    # TODO window assumes a lot of things to work for hyperstone
+	    my $cmd = "convert -dispose None -delay 0 -loop 1 -size ${w1}x${h1}";
+	    $cmd .= " xc:none";
+	    $cmd .= " -page +128+128 ${outPrefix}backdrop.png";
+	    #$cmd .= " -page +128+128 ${outPrefix}backdrop.png";
+	    $cmd .= " -page +128+128 ${outPrefix}scrollb_low.png";
+	    $cmd .= " -page +128+128 ${outPrefix}scrolla_low.png";
+	    if ( $windowEnabled ) {
+		$cmd .= " -page +128+128 ${outPrefix}window_low.png";
+	    }
+	    $cmd .= " $convertSpriteLow";
+	    $cmd .= " -page +128+128 ${outPrefix}scrollb_high.png";
+	    $cmd .= " -page +128+128 ${outPrefix}scrolla_high.png";
+	    if ( $windowEnabled ) {
+		$cmd .= " -page +128+128 ${outPrefix}window_high.png";
+	    }
+	    $cmd .= " $convertSpriteHigh";
+	    $cmd .= " ${outPrefix}composite.gif";
+	    system($cmd);
+	}
+    }
+}
+
+
+sub ByteSwapWords {
+    my $data = $_[0];
+    my $dataLength = length($data);
+    for ( my $dataIndex = 0; $dataIndex < $dataLength; $dataIndex += 2 ) {
+	substr($data,$dataIndex,2) = pack("n",unpack("v",substr($data,$dataIndex,2)));
+    }
+    return $data;
+}
+
+# TODO options not yet implemented
+#  -segacd            extract everything Sega CD related (if available)
+#  -megacd            extract everything Sega CD related (if available)
+#  -32x               extract everything 32x related (if available)
+
+sub Help {
+    die '
+scdgstextract [options] <gstfile>
+
+[description]
+  Extracts various parts of the gst files for easier usage.
+
+[options]
+  -all               extract everything
+  -genesis           extract everything Genesis related (68k, z80, vdp)
+  -megadrive         extract everything Genesis related (68k, z80, vdp)
+  -vdp               extract everything VDP related (cram, vsram, vram)
+  -ram68k            extract 68k RAM
+  -ramz80            extract z80 RAM
+  -cram              extract CRAM
+                     (gst stores as little endian, converts to big endian)
+  -vsram             extract VSRAM
+  -vram              extract VRAM
+  -png               make images for scroll a, window, scroll b, and sprites
+  -pngcrush          use pngcrush to make smaller png files
+  -composite         make composite image for VDP
+                     (tries to assemble VDP aspects into single GIF)
+                     [requires convert from ImageMagick]
+
+';
+}
