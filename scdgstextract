@@ -295,8 +295,8 @@ foreach my $gstFile (@gstFiles) {
 	close CRAM;
     }
 
+    my $vsram = substr($gstData,0x00192,0x50);
     if ( $extract & EXTRACT_VSRAM ) {
-	my $vsram = substr($gstData,0x00192,0x50);
 	open(VSRAM, ">${outPrefix}vsram.bin");
 	binmode VSRAM;
 	print VSRAM $vsram;
@@ -339,9 +339,35 @@ foreach my $gstFile (@gstFiles) {
 	my $rs = ( ( $vdpRegs[0x0C] >> 7 ) & 1 ) | ( ( $vdpRegs[0x0C] << 1 ) & 1 );
 
 	my $hscr = ( $vdpRegs[0x0B] & 0x03 );
+	my $vscr = ( ( $vdpRegs[0x0B] >> 2 ) & 0x01 );
 
 	# TODO support hscroll
-	print "TODO HSCR $hscr\n";
+	# print "TODO HSCR $hscr\n";
+
+	my $hscroll = ( $vdpRegs[0x0D] << 10 ) & 0xFC00;
+
+	if ( $composite &&
+	     ( substr($vsram ,0,4) ne ( chr(0x00) x 4 ) ||
+	       ( $vscr == 1 &&
+		 substr($vsram ,0,0x50) ne ( chr(0x00) x 0x50 ) ) ) ) {
+	    print "Don't support vertical scrolling in composite\n";
+	}
+
+	my $hscrollLength;
+	if ( $hscr == 0 ) {
+	    $hscrollLength = 2*2;
+	} elsif ( $hscr == 1 ) {
+	    $hscrollLength = 8*2*2;
+	} elsif ( $hscr == 2 ) {
+	    $hscrollLength = (240/8)*2*2;
+	} else {
+	    $hscrollLength = 240*2*2;
+	}
+	if ( $composite &&
+	     substr($vram,$hscroll,$hscrollLength) ne ( chr(0x00) x $hscrollLength) ) {
+	    print "Don't support horizontal scrolling in composite\n";
+	}
+
 
 	my $widthShown = 320;
 	if ( $rs == 0 ) {
@@ -401,7 +427,6 @@ foreach my $gstFile (@gstFiles) {
 	# 640 table size
 	my @spriteTable;
 	for ( my $spriteIndex = 0; $spriteIndex < 80; $spriteIndex++ ) {
-	    # TODO put all sprites on one image in their specific location
 	    my $spriteData = substr($vram,$spriteTableStart+$spriteIndex*8,8);
 	    my $spriteDataWord0 = unpack("n",substr($spriteData,0,2));
 	    my $spriteDataWord1 = unpack("n",substr($spriteData,2,2));
@@ -427,29 +452,6 @@ foreach my $gstFile (@gstFiles) {
 	    system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -paloffset=$palOffset -tilesfile=${outPrefix}vram.bin -tilesoffset=$tileOffset -sprite $flipVertOption $flipHorzOption $pngcrushOption -imgfile=${outPrefix}$imgFile");
 	}
 
-	my $convertSpriteLow = '';
-	my $convertSpriteHigh = '';
-	my $spriteIndex = 0;
-	do {
-	    if ( $spriteIndex > 80 ) {
-		print STDERR "Appears to be an invalid sprite link index: $spriteIndex\n";
-		exit;
-	    }
-	    if ( $spriteTable[$spriteIndex]{'visited'} ) {
-		print STDERR "Sprite table has infinite loop\n";
-		exit;
-	    }
-	    $spriteTable[$spriteIndex]{'visited'} = 1;
-	    my $convert = $spriteTable[$spriteIndex]{'convert'};
-	    my $priority = $spriteTable[$spriteIndex]{'priority'};
-	    if ( $priority ) {
-		$convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
-	    } else {
-		$convertSpriteLow = $convert . ' ' . $convertSpriteLow;
-	    }
-	    $spriteIndex = $spriteTable[$spriteIndex]{'link'};
-	} while ($spriteIndex > 0);
-	
 	my $w1 = $width + 128;
 	my $h1 = $height + 128;
 	if ( $w1 < 512+32 ) {
@@ -459,17 +461,44 @@ foreach my $gstFile (@gstFiles) {
 	    $h1 = 512+32;
 	}
 
-	print $backdrop."\n";
-	system("scdtile2img -width=$width -height=$height -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 -imgfile=${outPrefix}backdrop.png");
-
 	if ( $composite ) {
 	    # TODO scrolling
-	    # TODO assumes black background
 	    # TODO window assumes a lot of things to work for hyperstone
+
+	    # only make backdrop images when making composite
+	    system("scdtile2img -width=$widthShown -height=$heightShown -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_screen.png");
+	    system("scdtile2img -width=$width -height=$height -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_planes.png");
+	    system("scdtile2img -width=$w1 -height=$h1 -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_full.png");
+
+	    # determine sprite image ordering for composite
+	    my $convertSpriteLow = '';
+	    my $convertSpriteHigh = '';
+	    my $spriteIndex = 0;
+	    do {
+		if ( $spriteIndex > 80 ) {
+		    print STDERR "Appears to be an invalid sprite link index: $spriteIndex\n";
+		    exit;
+		}
+		if ( $spriteTable[$spriteIndex]{'visited'} ) {
+		    print STDERR "Sprite table has infinite loop\n";
+		    exit;
+		}
+		$spriteTable[$spriteIndex]{'visited'} = 1;
+		my $convert = $spriteTable[$spriteIndex]{'convert'};
+		my $priority = $spriteTable[$spriteIndex]{'priority'};
+		if ( $priority ) {
+		    $convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
+		} else {
+		    $convertSpriteLow = $convert . ' ' . $convertSpriteLow;
+		}
+		$spriteIndex = $spriteTable[$spriteIndex]{'link'};
+	    } while ($spriteIndex > 0);
+
 	    my $cmd = "convert -dispose None -delay 0 -loop 1 -size ${w1}x${h1}";
 	    $cmd .= " xc:none";
-	    $cmd .= " -page +128+128 ${outPrefix}backdrop.png";
-	    #$cmd .= " -page +128+128 ${outPrefix}backdrop.png";
+	    $cmd .= " -page +128+128 ${outPrefix}backdrop_screen.png";
+	    $cmd .= " -page +128+128 ${outPrefix}backdrop_planes.png";
+	    $cmd .= " -page +0+0 ${outPrefix}backdrop_full.png";
 	    $cmd .= " -page +128+128 ${outPrefix}scrollb_low.png";
 	    $cmd .= " -page +128+128 ${outPrefix}scrolla_low.png";
 	    if ( $windowEnabled ) {
@@ -525,6 +554,7 @@ scdgstextract [options] <gstfile>
   -pngcrush          use pngcrush to make smaller png files
   -composite         make composite image for VDP
                      (tries to assemble VDP aspects into single GIF)
+                     (does not support hscroll, vscroll, and most window planes)
                      [requires convert from ImageMagick]
 
 ';
