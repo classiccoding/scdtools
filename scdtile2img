@@ -59,16 +59,22 @@ my $tileMapWidthBad = 0;
 my $imgWidth = 0;
 my $imgHeight = 0;
 
+my $pngFlipVert = 0;
+my $pngFlipHorz = 0;
+
 my $pngcrush = 0;
 my $trans = 1;
 
-my $background = 0;
+my $background = -1;
 my $pngSRGB = 0;
 
 my $imgFile = '';
 
 my $aspectX = 0;
 my $aspectY = 0;
+
+# 1 low, 2 high, 3 both (default)
+my $priorityMask = 0x03;
 
 my @tiles;
 
@@ -83,6 +89,10 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-sprite$/i ) {
 	$tilesOrderPlane = 0;
 	$tilesReuse = 0;
+    } elsif ( $arg =~ /^-flip(vert|vertical)?$/i ) {
+	$pngFlipVert = 1;
+    } elsif ( $arg =~ /^-flip(horz|horizontal)$/i ) {
+	$pngFlipHorz = 1;
     } elsif ( $arg =~ /^-plane$/i ) {
 	$tilesOrderPlane = 1;
 	$tilesReuse = 0;
@@ -116,7 +126,9 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-notransparency$/i ) {
 	$trans = 0;
     } elsif ( $arg =~ /^-background$/i ) {
-	$background = 1;
+	$background = 0;
+    } elsif ( $arg =~ /^-background=(\d+)$/i ) {
+	$background = $1;
     } elsif ( $arg =~ /^-tilesfile=(.+)$/i ) {
 	$tilesFile = $1;
     } elsif ( $arg =~ /^-tilesbyteoffset=(\d+)$/i ) {
@@ -150,6 +162,12 @@ foreach my $arg (@ARGV) {
 	$tileMap2TilesOffset = $1;
     } elsif ( $arg =~ /^-mapwidth=([12])$/i ) {
 	$tileMapWidth = $1;
+    } elsif ( $arg =~ /^-priority=low$/i ) {
+	$priorityMask = 1;
+    } elsif ( $arg =~ /^-priority=high$/i ) {
+	$priorityMask = 2;
+    } elsif ( $arg =~ /^-priority=both$/i ) {
+	$priorityMask = 3;
     } elsif ( $arg =~ /^-imgfile=(.+)$/i ) {
 	$imgFile = $1;
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
@@ -263,10 +281,10 @@ sub Tile2Img {
 	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
     }
 
-    if ( $background ) {
+    if ( $background >= 0 ) {
 	# bKGD Background color
 	$chunk = 'bKGD';
-	$chunk .= chr(0x00);
+	$chunk .= chr($background);
 	$png .= pack("N",length($chunk)-4) . $chunk . pack("N",&crc($chunk));
     }
 
@@ -283,12 +301,18 @@ sub Tile2Img {
     my $filtered = '';
     my $w8 = int( $width / 8 );
     my $h8 = int( $height / 8 );
-    for ( my $y = 0; $y < $height; $y++ ) {
-	my $tileY = int( $y / 8 );
+    for ( my $pngY = 0; $pngY < $height; $pngY++ ) {
+	my $tileY = int( $pngY / 8 );
+	if ( $pngFlipVert ) {
+	    $tileY = int( ( $height - 1 - $pngY ) / 8 );
+	}
 	# filter byte (none)
 	$filtered .= chr(0x00);
-	for ( my $x = 0; $x < $width; $x += 2 ) {
-	    my $tileX = int( $x / 8 );
+	for ( my $pngX = 0; $pngX < $width; $pngX += 2 ) {
+	    my $tileX = int( $pngX / 8 );
+	    if ( $pngFlipHorz ) {
+		$tileX = int( ( $width - 1 - $pngX ) / 8 );
+	    }
 	    my $value;
 	    my $tilesIndex;
 	    my $flipVert = 0;
@@ -299,16 +323,19 @@ sub Tile2Img {
 	    } elsif ( $tilesOrderPlane ) {
 		$tilesIndex = $tileY * $w8 + $tileX;
 	    } else {
+		# sprite ordering
 		$tilesIndex = $tileY + $tileX * $h8;
 	    }
+	    my $priority = -1;
 	    my $pal = 0;
 	    if ( $tilesReuse ) {
 		my $tileMapIndex = $tileMapWidth*$tilesIndex;
 		if ( $tileMapIndex + $tileMapWidth > $tileMapDataLength ) {
-		    $tilesIndex = 0;
+		    $tilesIndex = -1;
 		} else {
 		    if ( $tileMapWidth > 1 ) {
 			my $tileMapValue = unpack("n",substr($tileMapData,$tileMapIndex+$tileMapWidth-2,2));
+			$priority   = ( $tileMapValue & 0x8000 ) >> 15;
 			$pal        = ( $tileMapValue & 0x6000 ) >> 13;
 			$flipVert   = ( $tileMapValue & 0x1000 ) >> 12;
 			$flipHorz   = ( $tileMapValue & 0x0800 ) >> 11;
@@ -319,17 +346,46 @@ sub Tile2Img {
 		    $tilesIndex -= $tileMap2TilesOffset;
 		}
 	    }
-	    if ( $tilesIndex > $#tiles ) {
-		$value = chr(0x00);
+	    if ( $priority >= 0 && $priorityMask != 3 ) {
+		if ( $priorityMask == 1 ) {
+		    if ( $priority ) {
+			# high priority tile but only want low priority ones
+			$tilesIndex = -1;
+		    }
+		} elsif ( $priorityMask == 2 ) {
+		    if ( ! $priority ) {
+			# low priority tile but only want high priority ones
+			$tilesIndex = -1;
+		    }
+		} else {
+		    die "Bad internal priority mask: $priorityMask\n";
+		}
+	    }
+	    if ( $tilesIndex < 0 || $tilesIndex > $#tiles ) {
+		# tile does not exist, make transparent
+		# when not transparent and background specified, use that
+		my $index = ( ! $trans && $background >= 0 ) ? $background : 0;
+		if ( $palette->GetPaletteCount() > 1 ) {
+		    $value = chr( $index & 0xFF ) x 2;
+		} else {
+		    $value = chr( ( ( $index & 0x0F ) << 4 ) |
+				  ( ( $index & 0x0F )      ) );
+		}
 	    } else {
-		my $x1 = $x;
-		my $y1 = $y;
+		if ( $pngFlipVert ) {
+		    $flipVert = ! $flipVert;
+		}
+		if ( $pngFlipHorz ) {
+		    $flipHorz = ! $flipHorz;
+		}
+		my $x1 = $pngX;
+		my $y1 = $pngY;
 		if ( $flipVert ) {
-		    $y1 = ( $y & 0xFFF8 ) | ( 7 - ( $y & 0x0007 ) );
+		    $y1 = ( $pngY & 0xFFF8 ) | ( 7 - ( $pngY & 0x0007 ) );
 		}
 		if ( $flipHorz ) {
 		    # remember working on 2x1 regions
-		    $x1 = ( $x & 0xFFF8 ) | ( 6 - ( $x & 0x0006 ) );
+		    $x1 = ( $pngX & 0xFFF8 ) | ( 6 - ( $pngX & 0x0006 ) );
 		}
 		$value = substr($tiles[$tilesIndex],($x1%8)/2+($y1%8)*4,1);
 		if ( $flipHorz ) {
@@ -337,21 +393,23 @@ sub Tile2Img {
 		    $value = chr( ( ( ord($value) & 0x0F ) << 4 ) |
 				  ( ( ord($value) & 0xF0 ) >> 4 ) );
 		}
-	    }
-	    if ( $palette->GetPaletteCount() > 1 ) {
-		if ( $paletteMapCinepak ne '' ) {
-		    $pal = (ord(substr($paletteMapCinepak,int($tilesIndex/4),1))>>2*((3-($tilesIndex%4)))) & 0x3;
+		if ( $palette->GetPaletteCount() > 1 ) {
+		    # currently have 4 bit colors, need to expand to 8 bit
+		    # colors and include palette indexes
+		    if ( $paletteMapCinepak ne '' ) {
+			$pal = (ord(substr($paletteMapCinepak,int($tilesIndex/4),1))>>2*((3-($tilesIndex%4)))) & 0x3;
+		    }
+		    my $valueInt = ord($value);
+		    my $c0 = ( $valueInt >> 4 ) & 0xF;
+		    if ( $c0 >= $transColorsPerPalette ) {
+			$c0 |= ($pal<<4);
+		    }
+		    my $c1 = ( $valueInt >> 0 ) & 0xF;
+		    if ( $c1 >= $transColorsPerPalette ) {
+			$c1 |= ($pal<<4);
+		    }
+		    $value = chr($c0).chr($c1);
 		}
-		my $valueInt = ord($value);
-		my $c0 = ( $valueInt >> 4 ) & 0xF;
-		if ( $c0 >= $transColorsPerPalette ) {
-		    $c0 |= ($pal<<4);
-		}
-		my $c1 = ( $valueInt >> 0 ) & 0xF;
-		if ( $c1 >= $transColorsPerPalette ) {
-		    $c1 |= ($pal<<4);
-		}
-		$value = chr($c0).chr($c1);
 	    }
 	    $filtered .= $value;
 	}
@@ -607,7 +665,7 @@ scdtile2img [options]
 [description]
   converts Sega VDP format files to a PNG image
 
-[options]
+'.$palette->GetHelpString().'[options]
   -palmapcinepak=<file>  specifies the palette map file (cinepak format)
   -tilesfile=<file>      specifies the tiles
   -tilesoffset=<#>       tile offset of the first tile in the tiles file
@@ -627,6 +685,10 @@ scdtile2img [options]
   -mapwidth=<#>          specifies the map entry width in bytes (default is 1)
   -plane                 specifies plane tile order and no tile reuse (default)
   -sprite                specifies sprite tile order and no tile reuse
+  -fliphorz              flips the image horizontally (useful for sprites)
+  -flipvert              flips the image vertically (useful for sprites)
+  -priority=<p>          specified either low, high, or both (default)
+                         tiles not meeting priority mask will be transparent
   -width=<#>             specifies the width of the image
   -height=<#>            specifies the height of the image
   -aspect320x240         sets PNG aspect accordingly
@@ -635,7 +697,8 @@ scdtile2img [options]
   -aspect256x224         sets PNG aspect accordingly
   -pngcrush              call pngcrush to make smaller PNG files
   -notransparency        do not use transparency for color 0
-  -background            set background color in PNG to black
+  -background            set background color in PNG to first color
+  -background=<#>        set background color in PNG to specific palette color
   -imgfile=<file>        the name of the output image file
   -v=<#>                 specify verbosity
 
