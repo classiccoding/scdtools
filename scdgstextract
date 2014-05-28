@@ -174,23 +174,44 @@ if ( $#ARGV < 0 ) {
 }
 
 # specific extractions
-use constant EXTRACT_CRAM       => 0x00000001;
-use constant EXTRACT_VSRAM      => 0x00000002;
-use constant EXTRACT_VRAM       => 0x00000004;
-use constant EXTRACT_RAM68K     => 0x00000010;
-use constant EXTRACT_RAMZ80     => 0x00000100;
-use constant EXTRACT_RAMPROGRAM => 0x00001000;
-use constant EXTRACT_RAMWORD    => 0x00002000;
-use constant EXTRACT_RAMPCM     => 0x00004000;
-# combinations of extracttions
+use constant EXTRACT_GEN68KREG     => 0x00000001;
+use constant EXTRACT_GEN68KRAM     => 0x00000002;
+use constant EXTRACT_GENZ80REG     => 0x00000010;
+use constant EXTRACT_GENZ80RAM     => 0x00000020;
+use constant EXTRACT_GENVDPREG     => 0x00000100;
+use constant EXTRACT_GENVDPCRAM    => 0x00000200;
+use constant EXTRACT_GENVDPVSRAM   => 0x00000400;
+use constant EXTRACT_GENVDPVRAM    => 0x00000800;
+use constant EXTRACT_SCD68KREG     => 0x00001000;
+use constant EXTRACT_SCDPROGRAMRAM => 0x00002000;
+use constant EXTRACT_SCDWORDRAM    => 0x00004000;
+use constant EXTRACT_SCDPCMRAM     => 0x00008000;
+# combinations of extractions
 use constant EXTRACT_NONE       => 0x00000000;
 use constant EXTRACT_ALL        => 0xFFFFFFFF;
-use constant EXTRACT_VDP        => 0x0000000F;
-use constant EXTRACT_GENESIS    => 0x00000FFF;
-use constant EXTRACT_SEGACD     => 0x0000F000;
-use constant EXTRACT_32X        => 0x000F0000;
+use constant EXTRACT_GEN        => 0x00000FFF;
+use constant EXTRACT_SCD        => 0x000FF000;
+use constant EXTRACT_32X        => 0x0FF00000;
+use constant EXTRACT_GEN68K     => 0x0000000F;
+use constant EXTRACT_GENZ80     => 0x000000F0;
+use constant EXTRACT_GENVDP     => 0x00000F00;
 
+use constant VDP_USAGE_NONE              => 0x00000000;
+use constant VDP_USAGE_TILE_SCROLL_A     => 0x00000001;
+use constant VDP_USAGE_TILE_SCROLL_B     => 0x00000002;
+use constant VDP_USAGE_TILE_WINDOW       => 0x00000004;
+use constant VDP_USAGE_TILE_SPRITE       => 0x00000008;
+use constant VDP_USAGE_SCROLL_A_TILE_MAP => 0x00000010;
+use constant VDP_USAGE_SCROLL_B_TILE_MAP => 0x00000020;
+use constant VDP_USAGE_WINDOW_TILE_MAP   => 0x00000040;
+use constant VDP_USAGE_SPRITE_TABLE      => 0x00000080;
+use constant VDP_USAGE_HSCROLL_TABLE     => 0x00000100;
+
+my $verbose = 0;
+my $verbosefiles = 0;
+my $verboseText = '';
 my $extractSpecified = EXTRACT_NONE;
+my $ramfiles = 0;
 my $png = 0;
 my $pngcrush = 0;
 my $composite = 0;
@@ -199,37 +220,60 @@ my @gstFiles;
 
 # parse args
 foreach my $arg (@ARGV) {
-    if ( $arg =~ /^-all$/i ) {
+    if ( $arg =~ /^-verbose$/i ) {
+	$verbose = 1;
+    } elsif ( $arg =~ /^-verbosefiles?$/i ) {
+	$verbosefiles = 1;
+	$verbose = 1;
+    } elsif ( $arg =~ /^-all$/i ) {
 	$extractSpecified |= EXTRACT_ALL;
-    } elsif ( $arg =~ /^-(genesis|megadrive)$/ ) {
-	$extractSpecified |= EXTRACT_GENESIS;
-    } elsif ( $arg =~ /^-(segacd|megacd)$/ ) {
-	$extractSpecified |= EXTRACT_SEGACD;
-    } elsif ( $arg =~ /^-32x$/ ) {
+    } elsif ( $arg =~ /^-(gen|genesis|megadrive)$/i ) {
+	$extractSpecified |= EXTRACT_GEN;
+    } elsif ( $arg =~ /^-(segacd|megacd)$/i ) {
+	$extractSpecified |= EXTRACT_SCD;
+    } elsif ( $arg =~ /^-32x$/i ) {
 	$extractSpecified |= EXTRACT_32X;
-    } elsif ( $arg =~ /^-vdp$/ ) {
-	$extractSpecified |= EXTRACT_VDP;
-    } elsif ( $arg =~ /^-cram$/i ) {
-	$extractSpecified |= EXTRACT_CRAM;
-    } elsif ( $arg =~ /^-vsram$/i ) {
-	$extractSpecified |= EXTRACT_VSRAM;
-    } elsif ( $arg =~ /^-vram$/i ) {
-	$extractSpecified |= EXTRACT_VRAM;
-    } elsif ( $arg =~ /^-ram68k$/i ) {
-	$extractSpecified |= EXTRACT_RAM68K;
-    } elsif ( $arg =~ /^-ramz80$/i ) {
-	$extractSpecified |= EXTRACT_RAMZ80;
+    } elsif ( $arg =~ /^-(gen)?68k$/i ) {
+	$extractSpecified |= EXTRACT_GEN68K;
+    } elsif ( $arg =~ /^-(gen?)z80$/i ) {
+	$extractSpecified |= EXTRACT_GENZ80;
+    } elsif ( $arg =~ /^-(gen)?vdp$/i ) {
+	$extractSpecified |= EXTRACT_GENVDP;
+    } elsif ( $arg =~ /^-(gen)?68kreg$/i ) {
+	$extractSpecified |= EXTRACT_GEN68KREG;
+    } elsif ( $arg =~ /^-(gen)?68kram$/i ) {
+	$extractSpecified |= EXTRACT_GEN68KRAM;
+    } elsif ( $arg =~ /^-(gen)?z80reg$/i ) {
+	$extractSpecified |= EXTRACT_GENZ80REG;
+    } elsif ( $arg =~ /^-(gen)?z80ram$/i ) {
+	$extractSpecified |= EXTRACT_GENZ80RAM;
+    } elsif ( $arg =~ /^-(gen)?vdpreg$/i ) {
+	$extractSpecified |= EXTRACT_GENVDPREG;
+    } elsif ( $arg =~ /^-(gen)?(vdp)?cram$/i ) {
+	$extractSpecified |= EXTRACT_GENVDPCRAM;
+    } elsif ( $arg =~ /^-(gen)?(vdp)?vsram$/i ) {
+	$extractSpecified |= EXTRACT_GENVDPVSRAM;
+    } elsif ( $arg =~ /^-(gen)?(vdp)?vram$/i ) {
+	$extractSpecified |= EXTRACT_GENVDPVRAM;
+    } elsif ( $arg =~ /^-ramfiles?$/i ) {
+	$ramfiles = 1;
     } elsif ( $arg =~ /^-png$/i ) {
 	$png = 1;
-	$extractSpecified |= EXTRACT_VDP;
+	$extractSpecified |= EXTRACT_GENVDP;
+	# TODO support scdtile2img calls using just gst
+	$ramfiles = 1;
     } elsif ( $arg =~ /^-pngcrush$/i ) {
 	$pngcrush = 1;
 	$png = 1;
-	$extractSpecified |= EXTRACT_VDP;
+	$extractSpecified |= EXTRACT_GENVDP;
+	# TODO support scdtile2img calls using just gst
+	$ramfiles = 1;
     } elsif ( $arg =~ /^-composite$/i ) {
 	$composite = 1;
 	$png = 1;
-	$extractSpecified |= EXTRACT_VDP;
+	$extractSpecified |= EXTRACT_GENVDP;
+	# TODO support scdtile2img calls using just gst
+	$ramfiles = 1;
     } elsif ( -e $arg ) {
 	push @gstFiles, $arg;
     } else {
@@ -249,6 +293,9 @@ if ( $#gstFiles < 0 ) {
 }
 
 foreach my $gstFile (@gstFiles) {
+    # reset globals per file
+    $verboseText = '';
+
     my $gstFileLength = -s $gstFile;
 
     my $outPrefix = $gstFile;
@@ -276,9 +323,9 @@ foreach my $gstFile (@gstFiles) {
     my $gstOffset32X = 0x22478;
 
     # reduce extractSpecified to extract based on system defined in gst
-    my $extract = $extractSpecified & EXTRACT_GENESIS;
+    my $extract = $extractSpecified & EXTRACT_GEN;
     if ( $system & 0x01 ) {
-	$extract |= $extractSpecified & EXTRACT_SEGACD;
+	$extract |= $extractSpecified & EXTRACT_SCD;
 	# TODO assumes sega cd is before 32x part, not clearly specified
 	$gstOffset32X += 0xE0000;
     }
@@ -286,148 +333,387 @@ foreach my $gstFile (@gstFiles) {
 	$extract |= $extractSpecified & EXTRACT_32X;
     }
 
-    if ( $extract & EXTRACT_CRAM ) {
-	# swap bytes to convert from little endian to big endian
-	my $cram = &ByteSwapWords(substr($gstData,0x00112,0x80));
-	open(CRAM, ">${outPrefix}cram.bin");
-	binmode CRAM;
-	print CRAM $cram;
-	close CRAM;
+    if ( $verbose ) {
+	my $systemText = 'Unknown';
+	if ( ( $system & 0x03 ) == 0 ) {
+	    $systemText = "Genesis / Megadrive";
+	} elsif ( ( $system & 0x03 ) == 1 ) {
+	    $systemText = "SegaCD / MegaCD";
+	} elsif ( ( $system & 0x03 ) == 2 ) {
+	    $systemText = "32X";
+	} elsif ( ( $system & 0x03 ) == 3 ) {
+	    $systemText = "SegaCD32X / MegaCD32X";
+	} else {
+	    die "Bad logic\n";
+	}
+	&VerbosePrintF("SYSTEM = %s\n",$systemText);
     }
+
+    if ( $extract & EXTRACT_GEN68KREG ) {
+	my $regd = &ByteSwapLongs(substr($gstData,0x00080,8*4));
+	my $rega = &ByteSwapLongs(substr($gstData,0x000A0,8*4));
+	my $regpc = &ByteSwapLongs(substr($gstData,0x000C8,4));
+	my $regsr = &ByteSwapWords(substr($gstData,0x000D0,2));
+	my $regusp = &ByteSwapLongs(substr($gstData,0x000D2,4));
+	my $regssp = &ByteSwapLongs(substr($gstData,0x000D6,4));
+	&VerboseRAM('REG68K  D',$regd,4,4,4,1);
+	&VerboseRAM('REG68K  A',$rega,4,4,4,1);
+	&VerbosePrintF("REG68K  PC = %8.8X\n",unpack("N",$regpc));
+	&VerbosePrintF("REG68K  SR = %4.4X\n",unpack("n",$regsr));
+	&VerbosePrintF("REG68K USP = %8.8X\n",unpack("N",$regusp));
+	&VerbosePrintF("REG68K SSP = %8.8X\n",unpack("N",$regssp));
+    }
+
+    if ( $extract & EXTRACT_GEN68KRAM ) {
+	my $ram68k = substr($gstData,0x02478,0x10000);
+	if ( $ramfiles ) {
+	    open(RAM68K, ">${outPrefix}ram68k.bin");
+	    binmode RAM68K;
+	    print RAM68K $ram68k;
+	    close RAM68K;
+	}
+	&VerboseRAM('RAM68K ',$ram68k,1,16,1,4);
+    }
+
+    if ( $extract & EXTRACT_GENZ80RAM ) {
+	# TODO support vebose for z80 regs
+    }
+
+    if ( $extract & EXTRACT_GENZ80RAM ) {
+	my $ramz80 = substr($gstData,0x00474,0x2000);
+	if ( $ramfiles ) {
+	    open(RAMZ80, ">${outPrefix}ramz80.bin");
+	    binmode RAMZ80;
+	    print RAMZ80 $ramz80;
+	    close RAMZ80;
+	}
+	&VerboseRAM('RAMZ80 ',$ramz80,1,16,1,4);
+    }
+
+    # swap bytes to convert from little endian to big endian
+    my $cram = &ByteSwapWords(substr($gstData,0x00112,0x80));
 
     my $vsram = substr($gstData,0x00192,0x50);
-    if ( $extract & EXTRACT_VSRAM ) {
-	open(VSRAM, ">${outPrefix}vsram.bin");
-	binmode VSRAM;
-	print VSRAM $vsram;
-	close VSRAM;
-    }
 
     my $vram = substr($gstData,0x12478,0x10000);
-    if ( $extract & EXTRACT_VRAM ) {
-	open(VRAM, ">${outPrefix}vram.bin");
-	binmode VRAM;
-	print VRAM $vram;
-	close VRAM;
+
+    my $regvdp = substr($gstData,0x000FA,24);
+
+    if ( $extract & EXTRACT_GENVDPCRAM ) {
+	if ( $ramfiles ) {
+	    open(CRAM, ">${outPrefix}cram.bin");
+	    binmode CRAM;
+	    print CRAM $cram;
+	    close CRAM;
+	}
     }
 
-    if ( $extract & EXTRACT_RAM68K ) {
-	my $ram68k = substr($gstData,0x02478,0x10000);
-	open(RAM68K, ">${outPrefix}ram68k.bin");
-	binmode RAM68K;
-	print RAM68K $ram68k;
-	close RAM68K;
+    if ( $extract & EXTRACT_GENVDPVSRAM ) {
+	if ( $ramfiles ) {
+	    open(VSRAM, ">${outPrefix}vsram.bin");
+	    binmode VSRAM;
+	    print VSRAM $vsram;
+	    close VSRAM;
+	}
     }
 
-    if ( $extract & EXTRACT_RAMZ80 ) {
-	my $ramz80 = substr($gstData,0x00474,0x2000);
-	open(RAMZ80, ">${outPrefix}ramz80.bin");
-	binmode RAMZ80;
-	print RAMZ80 $ramz80;
-	close RAMZ80;
+    if ( $extract & EXTRACT_GENVDPVRAM ) {
+	if ( $ramfiles ) {
+	    open(VRAM, ">${outPrefix}vram.bin");
+	    binmode VRAM;
+	    print VRAM $vram;
+	    close VRAM;
+	}
     }
 
-    if ( $png ) {
+    if ( $extract & EXTRACT_GENVDPREG ) {
+	my @tileUsage;
+	for ( my $i = 0; $i < 0x800; $i++ ) {
+	    $tileUsage[$i] = VDP_USAGE_NONE;
+	}
+
+	&VerboseRAM('REGVDP ',$regvdp,1,16,1,2);
+
 	my @vdpRegs;
 	for ( my $vdpReg = 0; $vdpReg < 24; $vdpReg++ ) {
-	    $vdpRegs[$vdpReg] = ord(substr($gstData,0x000FA+$vdpReg,1));
+	    $vdpRegs[$vdpReg] = ord(substr($regvdp,$vdpReg,1));
 	}
+
+	my $ie1 = ( $vdpRegs[0x00] & 0x10 ) ? 1 : 0;
+	my $palsel = ( $vdpRegs[0x00] & 0x04 ) ? 1 : 0;
+	my $m3 = ( $vdpRegs[0x00] & 0x02 ) ? 1 : 0;
+	my $displayDisable = ( $vdpRegs[0x00] & 0x01 ) ? 1 : 0;
+
+	my $tms9918 = ( $vdpRegs[0x01] & 0x80 ) ? 1 : 0;
+	my $displayEnable = ( $vdpRegs[0x01] & 0x40 ) ? 1 : 0;
+	my $ie0 = ( $vdpRegs[0x01] & 0x20 ) ? 1 : 0;
+	my $m1 = ( $vdpRegs[0x01] & 0x10 ) ? 1 : 0;
+	my $m2 = ( $vdpRegs[0x01] & 0x08 ) ? 1 : 0;
+	my $smsGenesisSel = ( $vdpRegs[0x01] & 0x04 ) ? 1 : 0;
+
+	my $scrollA = ( $vdpRegs[0x02] << 10 ) & 0xE000;
+
+	my $window = ( $vdpRegs[0x03] << 10 ) & 0xF800;
+
+	my $scrollB = ( $vdpRegs[0x04] << 13 ) & 0xE000;
+
+	my $spriteTableStart = ( $vdpRegs[0x05] <<  9 ) & 0xFE00;
+
+	my $backdrop = ( $vdpRegs[0x07] ) & 0x3F;
+
+	my $hintReg = $vdpRegs[0x0A];
+
+	my $ie2 = ( $vdpRegs[0x0B] & 0x08 ) ? 1 : 0;
+	my $vscr = ( $vdpRegs[0x0B] & 0x04 ) ? 1 : 0;
+	my $hscr = ( $vdpRegs[0x0B] & 0x02 ) ? 1 : 0;
+	my $lscr = ( $vdpRegs[0x0B] & 0x01 ) ? 1 : 0;
+
+	my $rs = ( ( $vdpRegs[0x0C] >> 7 ) & 1 ) | ( ( $vdpRegs[0x0C] << 1 ) & 1 );
+	my $rsCells = $rs ? 40 : 32;
+	my $lsm = ( ( $vdpRegs[0x0C] >> 1 ) & 0x03 );
+	my $lsmText = ( $lsm & 2 ) ? ( ( $lsm & 1 ) ? "double resolution interlace" : "normal resolution interlace" ) : "no interlace";
+
+	my $hscroll = ( $vdpRegs[0x0D] << 10 ) & 0xFC00;
+
+	my $autoIncrement = $vdpRegs[0x0F];
 
 	my $vsz = ( ( $vdpRegs[0x10] >> 4 ) & 0x03 );
 	my $hsz = ( ( $vdpRegs[0x10]      ) & 0x03 );
 
-	my $rs = ( ( $vdpRegs[0x0C] >> 7 ) & 1 ) | ( ( $vdpRegs[0x0C] << 1 ) & 1 );
+	my $windowRight = ( $vdpRegs[0x11] & 0x80 ) ? 1 : 0;
+	my $windowHorizontalPosition = ( $vdpRegs[0x11] & 0x1F ) * 16;
+	my $windowDown = ( $vdpRegs[0x12] & 0x80 ) ? 1 : 0;
+	my $windowVerticalPosition = ( $vdpRegs[0x12] & 0x1F ) * 8;
+	my $windowEnabled = ( $windowRight || $windowHorizontalPosition || $windowDown || $windowVerticalPosition ) ? 1 : 0;
 
-	my $hscr = ( $vdpRegs[0x0B] & 0x03 );
-	my $vscr = ( ( $vdpRegs[0x0B] >> 2 ) & 0x01 );
-
+	# refine things now that all fields have been detailed
 	# TODO support hscroll
-	# print "TODO HSCR $hscr\n";
 
-	my $hscroll = ( $vdpRegs[0x0D] << 10 ) & 0xFC00;
-
+	my $vscrollLength = $vscr ? 0x50 : 0x04;
 	if ( $composite &&
-	     ( substr($vsram ,0,4) ne ( chr(0x00) x 4 ) ||
-	       ( $vscr == 1 &&
-		 substr($vsram ,0,0x50) ne ( chr(0x00) x 0x50 ) ) ) ) {
-	    print "Don't support vertical scrolling in composite\n";
+	     substr($vsram,0,$vscrollLength) ne ( chr(0x00) x $vscrollLength) ) {
+	    print STDERR "Don't support vertical scrolling in composite\n";
 	}
 
 	my $hscrollLength;
 	if ( $hscr == 0 ) {
-	    $hscrollLength = 2*2;
-	} elsif ( $hscr == 1 ) {
-	    $hscrollLength = 8*2*2;
-	} elsif ( $hscr == 2 ) {
-	    $hscrollLength = (240/8)*2*2;
+	    if ( $lscr == 0 ) {
+		$hscrollLength = 2*2;
+	    } else {
+		$hscrollLength = 8*2*2;
+	    }
 	} else {
-	    $hscrollLength = 240*2*2;
+	    if ( $lscr == 0 ) {
+		$hscrollLength = (240/8)*2*2;
+	    } else {
+		$hscrollLength = 240*2*2;
+	    }
 	}
+	# mark hscroll in tileusage
+	for ( my $vramOffset = $hscroll; $vramOffset < $hscroll+$hscrollLength; $vramOffset += 2 ) {
+	    $tileUsage[$vramOffset/32] |= VDP_USAGE_HSCROLL_TABLE;
+	}
+
 	if ( $composite &&
 	     substr($vram,$hscroll,$hscrollLength) ne ( chr(0x00) x $hscrollLength) ) {
-	    print "Don't support horizontal scrolling in composite\n";
+	    print STDERR "Don't support horizontal scrolling in composite\n";
 	}
 
+	my $widthShown = 8 * $rsCells;
 
-	my $widthShown = 320;
-	if ( $rs == 0 ) {
-	    $widthShown = 256;
-	}
-
-	my $width = 32*8;
+	my $widthPlaneCells = 32;
 	if ( $hsz == 1 ) {
-	    $width = 64*8;
+	    $widthPlaneCells = 64;
 	} elsif ( $hsz == 3 ) {
-	    $width = 128*8;
+	    $widthPlaneCells = 128;
 	}
+	my $widthPlane = $widthPlaneCells*8;
 
 	my $heightShown = 32*8;
 
-	my $height = 32*8;
+	my $heightPlaneCells = 32;
 	if ( $vsz == 1 ) {
-	    $height = 64*8;
+	    $heightPlaneCells = 64;
 	} elsif ( $vsz == 3 ) {
-	    $height = 128*8;
+	    $heightPlaneCells = 128;
 	}
+	my $heightPlane = $heightPlaneCells*8;
 
-	my $scrollA = ( $vdpRegs[0x02] << 10 ) & 0xE000;
-	my $window = ( $vdpRegs[0x03] << 10 ) & 0xF800;
-	if ( $widthShown == 320 ) {
+	if ( $rsCells == 40 ) {
 	    # 40 cell mode A11 zeroed
 	    $window &= 0xF000;
-	}
-	my $scrollB = ( $vdpRegs[0x04] << 13 ) & 0xE000;
-	my $spriteTableStart = ( $vdpRegs[0x05] <<  9 ) & 0xFE00;
-	if ( $widthShown == 320 ) {
 	    # 40 cell mode A09 zeroed
 	    $spriteTableStart &= 0xFC00;
 	}
 
-	my $windowWidth  = $widthShown;
-	my $windowHeight = ( $vdpRegs[0x12] & 0x1F ) * 8;
-	if ( $vdpRegs[0x12] & 0x80 ) {
-	    $windowHeight = $heightShown - $windowHeight;
+	if ( $verbose ) {
+	    &VerbosePrintF("REGVDP DETAIL REG00[4] IE1 HORIZONTAL INTERRUPT ENABLE = %d\n",$ie1);
+	    &VerbosePrintF("REGVDP DETAIL REG00[2] PALETTE SELECT = %d\n",$palsel);
+	    &VerbosePrintF("REGVDP DETAIL REG00[1] M3 HV COUNTER LATCH ENABLE = %d\n",$m3);
+	    &VerbosePrintF("REGVDP DETAIL REG00[0] DISPLAY DISABLE = %d\n",$displayDisable);
+	    &VerbosePrintF("REGVDP DETAIL REG01[7] TMS9918 GENESIS DISPLAY SELECT = %d\n",$tms9918);
+	    &VerbosePrintF("REGVDP DETAIL REG01[6] DISPLAY ENABLE = %d\n",$displayEnable);
+	    &VerbosePrintF("REGVDP DETAIL REG01[5] IE0 VERTICAL INTERRUPT ENABLE = %d\n",$ie0);
+	    &VerbosePrintF("REGVDP DETAIL REG01[4] M1 DMA ENABLE = %d\n",$m1);
+	    &VerbosePrintF("REGVDP DETAIL REG01[3] M2 V30 CELL (PAL:1) / V28 CELL (NTSC:0) = %d\n",$m2);
+	    &VerbosePrintF("REGVDP DETAIL REG01[2] SMS (0) / GENESIS (1) DISPLAY SELECT = %d\n",$smsGenesisSel);
+	    &VerbosePrintF("REGVDP DETAIL REG02    TABLE ADDRESS SCROLL A = %4.4X\n",$scrollA);
+	    &VerbosePrintF("REGVDP DETAIL REG03    TABLE ADDRESS WINDOW   = %4.4X\n",$window);
+	    &VerbosePrintF("REGVDP DETAIL REG04    TABLE ADDRESS SCROLL B = %4.4X\n",$scrollB);
+	    &VerbosePrintF("REGVDP DETAIL REG05    TABLE ADDRESS SPRITE   = %4.4X\n",$spriteTableStart);
+	    &VerbosePrintF("REGVDP DETAIL REG07    BACKDROP INDEX = %2.2X\n",$backdrop);
+	    &VerbosePrintF("REGVDP DETAIL REG07    BACKDROP COLOR = %4.4X\n",unpack("n",substr($cram,$backdrop*2,2)));
+	    &VerbosePrintF("REGVDP DETAIL REG0A    H INTERRUPT REGISTER = %2.2X\n",$hintReg);
+	    &VerbosePrintF("REGVDP DETAIL REG0A[3] IE2 (ENABLE EXTERNAL INT) = %d\n",$ie2);
+	    &VerbosePrintF("REGVDP DETAIL REG0A[2] VSCR = %d\n",$vscr);
+	    &VerbosePrintF("REGVDP DETAIL REG0A[1] HSCR = %d\n",$hscr);
+	    &VerbosePrintF("REGVDP DETAIL REG0A[0] LSCR = %d\n",$lscr);
+	    &VerbosePrintF("REGVDP DETAIL REG0C    SCREEN WIDTH = %d CELLS\n",$rsCells);
+	    &VerbosePrintF("REGVDP DETAIL REG0C    %s\n",uc($lsmText));
+	    &VerbosePrintF("REGVDP DETAIL REG0D    TABLE ADDRESS H SCROLL = %4.4X\n",$hscroll);
+	    &VerbosePrintF("REGVDP DETAIL REG0F    AUTO INCREMENT = %2.2X\n",$autoIncrement);
+	    &VerbosePrintF("REGVDP DETAIL REG10    SCROLL WIDTH = %d CELLS\n",$widthPlaneCells);
+	    &VerbosePrintF("REGVDP DETAIL REG10    SCROLL HEIGHT = %d CELLS\n",$heightPlaneCells);
+
+	    &VerbosePrintF("REGVDP DETAIL REG11    WINDOW RIGHT = %d\n",$windowRight);
+	    &VerbosePrintF("REGVDP DETAIL REG11    WINDOW HORIZONTAL POSITION = %3.3X\n",$windowHorizontalPosition);
+	    &VerbosePrintF("REGVDP DETAIL REG12    WINDOW DOWN = %d\n",$windowDown);
+	    &VerbosePrintF("REGVDP DETAIL REG12    WINDOW VERTICAL POSITION = %3.3X\n",$windowVerticalPosition);
 	}
 
-	my $windowEnabled = ( $windowWidth && $windowHeight );
+	# TODO move somewhere else?
+	if ( $png ) {
+	    # TODO does not remove window part of scroll A
 
-	my $backdrop = ( $vdpRegs[0x07] ) & 0x3F;
+	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrolla_low.png");
+	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrolla_high.png");
 
-	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrolla_low.png");
-	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrolla_high.png");
+	    # TODO does not remove unused part of window
+	    if ( $windowEnabled ) {
+		system("scdtile2img -width=$widthShown -height=$heightShown -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=low  -imgfile=${outPrefix}window_low.png");
+		system("scdtile2img -width=$widthShown -height=$heightShown -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=high  -imgfile=${outPrefix}window_high.png");
+	    }
 
-	if ( $windowEnabled ) {
-	    system("scdtile2img -width=$windowWidth -height=$windowHeight -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=low  -imgfile=${outPrefix}window_low.png");
-	    system("scdtile2img -width=$windowWidth -height=$windowHeight -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=high  -imgfile=${outPrefix}window_high.png");
+	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrollb_low.png");
+	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrollb_high.png");
+
+	    # makes 512x256 picture
+	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal0.png");
+	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -paloffset=1 -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal1.png");
+	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -paloffset=2 -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal2.png");
+	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -paloffset=3 -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal3.png");
 	}
 
-	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrollb_low.png");
-	system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrollb_high.png");
+	if ( $verbose ) {
+	    if ( $windowEnabled ) {
+		my $windowTiles = $rsCells*0x20;
+		for ( my $windowIndex = 0; $windowIndex < $windowTiles; $windowIndex++ ) {
+		    my $vramOffset = $window+2*$windowIndex;
+		    $tileUsage[$vramOffset/32] |= VDP_USAGE_WINDOW_TILE_MAP;
+		    my $tileMapData = substr($vram,$vramOffset,2);
+		    my $tileMapDataWord = unpack("n",substr($tileMapData,0,2));
+		    my $priority   = ( ( $tileMapDataWord >> 15 ) & 0x0001 );
+		    my $palOffset  = ( ( $tileMapDataWord >> 13 ) & 0x0003 );
+		    my $flipVert   = ( ( $tileMapDataWord >> 12 ) & 0x0001 );
+		    my $flipHorz   = ( ( $tileMapDataWord >> 11 ) & 0x0001 );
+		    my $tileOffset = ( ( $tileMapDataWord       ) & 0x07FF );
+		    my $x = $windowIndex % $rsCells;
+		    my $y = int( $windowIndex / $rsCells );
+		    my $shown = 0;
+		    if ( $windowRight ) {
+			if ( $x*8 >= $windowHorizontalPosition ) {
+			    $shown = 1;
+			}
+		    } else {
+			if ( $x*8 < $windowHorizontalPosition ) {
+			    $shown = 1;
+			}
+		    }
+		    if ( $windowDown ) {
+			if ( $y*8 >= $windowVerticalPosition ) {
+			    $shown = 1;
+			}
+		    } else {
+			if ( $y*8 < $windowVerticalPosition ) {
+			    $shown = 1;
+			}
+		    }
+		    if ( $shown ) {
+			$tileUsage[$tileOffset] |= VDP_USAGE_TILE_WINDOW;
+		    }
+		    my $v = sprintf("(%3d,%3d) PRIOR=%d PAL=%d FLIP(H=%d,V=%d) TILE=%3.3X SHOWN=%d",$x,$y,$priority,$palOffset,$flipHorz,$flipVert,$tileOffset,$shown);
+		    &VerbosePrintF("WINDOW TILE MAP %s\n",$v);
+		}
+	    }
 
-	# 640 table size
+	    my $planeTiles = ($widthPlane/8)*($heightPlane/8);
+
+	    for ( my $planeIndex = 0; $planeIndex < $planeTiles; $planeIndex++ ) {
+		my $vramOffset = $scrollA+2*$planeIndex;
+		$tileUsage[$vramOffset/32] |= VDP_USAGE_SCROLL_A_TILE_MAP;
+		my $tileMapData = substr($vram,$vramOffset,2);
+		my $tileMapDataWord = unpack("n",substr($tileMapData,0,2));
+		my $priority   = ( ( $tileMapDataWord >> 15 ) & 0x0001 );
+		my $palOffset  = ( ( $tileMapDataWord >> 13 ) & 0x0003 );
+		my $flipVert   = ( ( $tileMapDataWord >> 12 ) & 0x0001 );
+		my $flipHorz   = ( ( $tileMapDataWord >> 11 ) & 0x0001 );
+		my $tileOffset = ( ( $tileMapDataWord       ) & 0x07FF );
+		my $x = $planeIndex % ($widthPlane/8);
+		my $y = int( $planeIndex / ($widthPlane/8) );
+		my $shown = 1;
+		if ( $windowRight ) {
+		    if ( $x*8 >= $windowHorizontalPosition ) {
+			$shown = 0;
+		    }
+		} else {
+		    if ( $x*8 < $windowHorizontalPosition ) {
+			$shown = 0;
+		    }
+		}
+		if ( $windowDown ) {
+		    if ( $y*8 >= $windowVerticalPosition ) {
+			$shown = 0;
+		    }
+		} else {
+		    if ( $y*8 < $windowVerticalPosition ) {
+			$shown = 0;
+		    }
+		}
+		if ( $shown ) {
+		    $tileUsage[$tileOffset] |= VDP_USAGE_TILE_SCROLL_A;
+		}
+		my $v = sprintf("(%3d,%3d) PRIOR=%d PAL=%d FLIP(H=%d,V=%d) TILE=%3.3X SHOWN=%d",$x,$y,$priority,$palOffset,$flipHorz,$flipVert,$tileOffset,$shown);
+		&VerbosePrintF("SCROLL A TILE MAP %s\n",$v);
+	    }
+
+	    for ( my $planeIndex = 0; $planeIndex < $planeTiles; $planeIndex++ ) {
+		my $vramOffset = $scrollB+2*$planeIndex;
+		$tileUsage[$vramOffset/32] |= VDP_USAGE_SCROLL_B_TILE_MAP;
+		my $tileMapData = substr($vram,$vramOffset,2);
+		my $tileMapDataWord = unpack("n",substr($tileMapData,0,2));
+		my $priority   = ( ( $tileMapDataWord >> 15 ) & 0x0001 );
+		my $palOffset  = ( ( $tileMapDataWord >> 13 ) & 0x0003 );
+		my $flipVert   = ( ( $tileMapDataWord >> 12 ) & 0x0001 );
+		my $flipHorz   = ( ( $tileMapDataWord >> 11 ) & 0x0001 );
+		my $tileOffset = ( ( $tileMapDataWord       ) & 0x07FF );
+		my $x = $planeIndex % ($widthPlane/8);
+		my $y = int( $planeIndex / ($widthPlane/8) );
+		$tileUsage[$tileOffset] |= VDP_USAGE_TILE_SCROLL_B;
+		my $v = sprintf("(%3d,%3d) PRIOR=%d PAL=%d FLIP(H=%d,V=%d) TILE=%3.3X",$x,$y,$priority,$palOffset,$flipHorz,$flipVert,$tileOffset);
+		&VerbosePrintF("SCROLL B TILE MAP %s\n",$v);
+	    }
+	}
+
 	my @spriteTable;
-	for ( my $spriteIndex = 0; $spriteIndex < 80; $spriteIndex++ ) {
-	    my $spriteData = substr($vram,$spriteTableStart+$spriteIndex*8,8);
+	my $spriteMax = 80;
+	if ( $rs == 0 ) {
+	    $spriteMax = 64;
+	}
+
+	for ( my $spriteIndex = 0; $spriteIndex < $spriteMax; $spriteIndex++ ) {
+	    my $vramOffset = $spriteTableStart+8*$spriteIndex;
+	    $tileUsage[$vramOffset/32] |= VDP_USAGE_SPRITE_TABLE;
+	    my $spriteData = substr($vram,$vramOffset,8);
 	    my $spriteDataWord0 = unpack("n",substr($spriteData,0,2));
 	    my $spriteDataWord1 = unpack("n",substr($spriteData,2,2));
 	    my $spriteDataWord2 = unpack("n",substr($spriteData,4,2));
@@ -442,59 +728,144 @@ foreach my $gstFile (@gstFiles) {
 	    my $flipHorz   = ( ( $spriteDataWord2 >> 11 ) & 0x0001 );
 	    my $tileOffset = ( ( $spriteDataWord2       ) & 0x07FF );
 	    my $x          = ( ( $spriteDataWord3       ) & 0x03FF );
+	    my $v = '';
+
+	    my $shown = 0;
+	    if ( $x+$width-1 >= 128 &&
+		 $x < 128 + $rsCells*8 &&
+		 $y+$height-1 >= 128 &&
+		 $y < 128 + 32*8 ) {
+		$shown = 1;
+	    }
+
 	    my $imgFile = sprintf("sprite%2.2X.png",$spriteIndex);
-	    my $flipVertOption = $flipVert ? '-flipvert' : '';
-	    my $flipHorzOption = $flipHorz ? '-fliphorz' : '';
 	    $spriteTable[$spriteIndex]{'convert'} = "-page +$x+$y ${outPrefix}$imgFile";
+	    $spriteTable[$spriteIndex]{'width'} = $width;
+	    $spriteTable[$spriteIndex]{'height'} = $height;
 	    $spriteTable[$spriteIndex]{'priority'} = $priority;
 	    $spriteTable[$spriteIndex]{'link'} = $link;
+	    $spriteTable[$spriteIndex]{'tileOffset'} = $tileOffset;
+	    $spriteTable[$spriteIndex]{'shown'} = $shown;
 	    $spriteTable[$spriteIndex]{'visited'} = 0;
-	    system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -paloffset=$palOffset -tilesfile=${outPrefix}vram.bin -tilesoffset=$tileOffset -sprite $flipVertOption $flipHorzOption $pngcrushOption -imgfile=${outPrefix}$imgFile");
+
+	    if ( $verbose ) {
+		# TODO no room for SHOWN
+		$v = sprintf("%2.2X %2dx%2d @ (%3d,%3d) PRIOR=%d PAL=%d FLIP(H=%d,V=%d) TILE=%3.3X LINK=%2.2X",$spriteIndex,$width,$height,$x,$y,$priority,$palOffset,$flipHorz,$flipVert,$tileOffset,$link);
+		$spriteTable[$spriteIndex]{'verbose'} = $v;
+		&VerbosePrintF("SPRITE %s\n",$v);
+	    }
+
+	    if ( $png ) {
+		my $flipVertOption = $flipVert ? '-flipvert' : '';
+		my $flipHorzOption = $flipHorz ? '-fliphorz' : '';
+		system("scdtile2img -width=$width -height=$height -palfile=${outPrefix}cram.bin -paloffset=$palOffset -tilesfile=${outPrefix}vram.bin -tilesoffset=$tileOffset -sprite $flipVertOption $flipHorzOption $pngcrushOption -imgfile=${outPrefix}$imgFile");
+	    }
+
 	}
 
-	my $w1 = $width + 128;
-	my $h1 = $height + 128;
-	if ( $w1 < 512+32 ) {
-	    $w1 = 512+32;
+	# determine sprite image ordering for composite
+	my $spriteIndex = 0;
+	my $convertSpriteLow = '';
+	my $convertSpriteHigh = '';
+	my $spriteLoop = 0;
+	my $spriteBadIndex = 0;
+	do {
+	    if ( $spriteIndex > $spriteMax ) {
+		$spriteBadIndex = 1;
+		print STDERR "Appears to be an invalid sprite link index: $spriteIndex\n";
+		exit;
+	    }
+	    if ( $spriteTable[$spriteIndex]{'visited'} ) {
+		$spriteLoop = 1;
+		print STDERR "Sprite table has infinite loop\n";
+		exit;
+	    }
+	    # mark visited to track if loop in sprite links
+	    $spriteTable[$spriteIndex]{'visited'} = 1;
+	    my $convert = $spriteTable[$spriteIndex]{'convert'};
+	    my $width = $spriteTable[$spriteIndex]{'width'};
+	    my $height = $spriteTable[$spriteIndex]{'height'};
+	    my $priority = $spriteTable[$spriteIndex]{'priority'};
+	    my $tileOffset = $spriteTable[$spriteIndex]{'tileOffset'};
+	    my $shown = $spriteTable[$spriteIndex]{'shown'};
+	    if ( $shown ) {
+		# need to determine tiles used by sprite
+		my $count = $width/8*$height/8;
+		for ( my $i = 0 ; $i < $count; $i++ ) {
+		    $tileUsage[(($tileOffset+$i) & 0x7FF)] |= VDP_USAGE_TILE_SPRITE;
+		}
+	    }
+	    if ( $priority ) {
+		$convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
+	    } else {
+		$convertSpriteLow = $convert . ' ' . $convertSpriteLow;
+	    }
+	    if ( $verbose ) {
+		my $v = $spriteTable[$spriteIndex]{'verbose'};
+		&VerbosePrintF("SPRITEORDER %s\n",$v);
+	    }
+	    $spriteIndex = $spriteTable[$spriteIndex]{'link'};
+	} while ($spriteIndex > 0);
+
+	if ( $verbose ) {
+	    if ( $spriteLoop ) {
+		&VerbosePrintF("SPRITE LOOP = %d\n",$spriteLoop);
+	    }
+	    if ( $spriteBadIndex ) {
+		&VerbosePrintF("SPRITE BAD INDEX = %d\n",$spriteBadIndex);
+	    }
 	}
-	if ( $h1 < 512+32 ) {
-	    $h1 = 512+32;
+
+	if ( $verbose ) {
+	    &VerbosePrintF("VDPUSAGE HELP 001 = TILE SCROLL A\n");
+	    &VerbosePrintF("VDPUSAGE HELP 002 = TILE SCROLL B\n");
+	    &VerbosePrintF("VDPUSAGE HELP 004 = TILE WINDOW\n");
+	    &VerbosePrintF("VDPUSAGE HELP 008 = TILE SPRITE\n");
+	    &VerbosePrintF("VDPUSAGE HELP 010 = SCROLL A TILE MAP\n");
+	    &VerbosePrintF("VDPUSAGE HELP 020 = SCROLL B TILE MAP\n");
+	    &VerbosePrintF("VDPUSAGE HELP 040 = WINDOW TILE MAP\n");
+	    &VerbosePrintF("VDPUSAGE HELP 080 = SPRITE TABLE\n");
+	    &VerbosePrintF("VDPUSAGE HELP 100 = HSCROLL TABLE\n");
+	    my $out = '';
+	    for ( my $i = 0; $i < 0x800; $i += 0x010 ) {
+		$out .= 'VDPUSAGE '.sprintf("%4.4X", $i * 32).' =';
+		for ( my $j = 0; $j < 0x010; $j++ ) {
+		    my $usage = $tileUsage[$i+$j];
+		    if ( $usage ) {
+			$out .= sprintf(" %3.3X",$tileUsage[$i+$j]);
+		    } else {
+			$out .= '    ';
+		    }
+		}
+		$out .= "\n";
+	    }
+	    &VerbosePrintF($out);
 	}
 
 	if ( $composite ) {
+	    # see what is bigger, plane offset into sprite area or sprite area
+	    my $w1 = $widthPlane + 128;
+	    my $h1 = $heightPlane + 128;
+	    if ( $w1 < 512+32 ) {
+		$w1 = 512+32;
+	    }
+	    if ( $h1 < 512+32 ) {
+		$h1 = 512+32;
+	    }
+
 	    # TODO scrolling
-	    # TODO window assumes a lot of things to work for hyperstone
+	    # TODO window displays all, assumes unused aspects are clear
+	    # TODO scroll a displays all, assumes window covered aspect are clear
+	    # TODO double interlace
+	    # TODO sprite mask modes
+	    # TODO shadow/highlight
 
 	    # only make backdrop images when making composite
 	    system("scdtile2img -width=$widthShown -height=$heightShown -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_screen.png");
-	    system("scdtile2img -width=$width -height=$height -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_planes.png");
+	    system("scdtile2img -width=$widthPlane -height=$heightPlane -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_planes.png");
 	    system("scdtile2img -width=$w1 -height=$h1 -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_full.png");
 
-	    # determine sprite image ordering for composite
-	    my $convertSpriteLow = '';
-	    my $convertSpriteHigh = '';
-	    my $spriteIndex = 0;
-	    do {
-		if ( $spriteIndex > 80 ) {
-		    print STDERR "Appears to be an invalid sprite link index: $spriteIndex\n";
-		    exit;
-		}
-		if ( $spriteTable[$spriteIndex]{'visited'} ) {
-		    print STDERR "Sprite table has infinite loop\n";
-		    exit;
-		}
-		$spriteTable[$spriteIndex]{'visited'} = 1;
-		my $convert = $spriteTable[$spriteIndex]{'convert'};
-		my $priority = $spriteTable[$spriteIndex]{'priority'};
-		if ( $priority ) {
-		    $convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
-		} else {
-		    $convertSpriteLow = $convert . ' ' . $convertSpriteLow;
-		}
-		$spriteIndex = $spriteTable[$spriteIndex]{'link'};
-	    } while ($spriteIndex > 0);
-
-	    my $cmd = "convert -dispose None -delay 0 -loop 1 -size ${w1}x${h1}";
+	    my $cmd = "convert -dispose None -delay 0 -loop 0 -size ${w1}x${h1}";
 	    $cmd .= " xc:none";
 	    $cmd .= " -page +128+128 ${outPrefix}backdrop_screen.png";
 	    $cmd .= " -page +128+128 ${outPrefix}backdrop_planes.png";
@@ -515,14 +886,118 @@ foreach my $gstFile (@gstFiles) {
 	    system($cmd);
 	}
     }
+
+    if ( $extract & EXTRACT_GENVDPCRAM ) {
+	&VerboseRAM('CRAM ',$cram,2,16,1,2);
+    }
+
+    if ( $extract & EXTRACT_GENVDPVSRAM ) {
+	&VerboseRAM('VSRAM ',$vsram,2,16,1,2);
+    }
+
+    if ( $extract & EXTRACT_GENVDPVRAM ) {
+	&VerboseRAM('VRAM ',$vram,1,16,1,4);
+    }
+
+    if ( $verbose ) {
+	if ( $verbosefiles ) {
+	    open(VERBOSE, ">${outPrefix}verbose.txt");
+	    print VERBOSE $verboseText;
+	    close VERBOSE;
+	} else {
+	    print $verboseText;
+	}
+    }
 }
 
+
+# append text for verbose
+sub VerbosePrintF {
+    return if ! $verbose;
+    my $format = shift @_;
+    $verboseText .= sprintf($format,@_);
+}
+
+# prefix : display prefix at beginning of line (including space before address)
+# data : data to display
+# bytesPerGroup : should be a power of 2 (so 1, 2, 4, etc)
+# bytesPerLine : how many bytes per line
+# bytesPerPrintedAddress : how many bytes mean 1 for address
+#                          (useful for reg dumps)
+# nibblesForAddress : how many nibbles to write address as
+#PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPAAAAAA = XXXXXXXX XXXXXXXX XXXXXXXX XXXXXXXX
+#PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPAAAAAA = XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX
+#PPPPPPPPPPPPPPPPPPPPPPAAAAAA = XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX
+sub VerboseRAM {
+    return if ! $verbose;
+    my ($prefix,$data,$bytesPerGroup,$bytesPerLine,$bytesPerPrintedAddress,$nibblesForAddress) = @_;
+    my $dataLength = length($data);
+    my $out = '';
+    my $prefixLength = length($prefix);
+    my $bytespace = ( $bytesPerGroup & 1 ) ? ' ' : '';
+    my $wordspace = ( $bytesPerGroup & 3 ) ? ' ' : '';
+    my $addressPrintF = "%${nibblesForAddress}.${nibblesForAddress}X";
+    my $guide = '';
+    if ( $bytesPerGroup < $bytesPerLine ) {
+	# PPPPPPPPPPPPPAAAAAA = XX
+	# note do not include space after '=' since loop will add that
+	$guide = $prefix . (' ' x ( $nibblesForAddress + 2 ) );
+	# generic way to make guides like below examples
+	#  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+	# XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX XX
+	#    0    2    4    6    8    A    C    E
+	# XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX
+	#        0        4        8        C
+	# XXXXXXXX XXXXXXXX XXXXXXXX XXXXXXXX
+	for ( my $i = 0; $i < $bytesPerLine; $i += $bytesPerGroup ) {
+	    if ( $bytesPerLine <= 16 ) {
+		$guide .= ' ' x (1+2*($bytesPerGroup-1)).sprintf(" %1.1X",$i);
+	    } else {
+		$guide .= ' ' x (1+2*($bytesPerGroup-1)).sprintf("%2.2X",$i);
+	    }
+	}
+	$guide .= "\n";
+    }
+    for ( my $addressRow = 0; $addressRow < $dataLength; $addressRow += $bytesPerLine ) {
+	# every 16 rows print out new guide (including first row)
+	# nice power of 2 and should be have guide on every console screen
+	if ( ( ( $addressRow / $bytesPerLine ) & 0xF ) == 0 ) {
+	    $out .= $guide;
+	}
+	my $addressPrinted = $addressRow / $bytesPerPrintedAddress;
+	$out .= $prefix.sprintf($addressPrintF,$addressPrinted).' =';
+	# do two bytes at a time
+	for ( my $addressCol = 0; $addressCol < $bytesPerLine; $addressCol++ ) {
+	    if ( ( $bytesPerGroup & 1 ) ||
+		 ( ( $addressCol & 1 ) == 0 && ( $bytesPerGroup & 3 ) ) ||
+		 ( ( $addressCol & 3 ) == 0 ) ) {
+		$out .= ' ';
+	    }
+	    my $address = $addressRow+$addressCol;
+	    if ( $address >= $dataLength ) {
+		last;
+	    }
+	    $out .= sprintf("%2.2X",ord(substr($data,$address,1)));
+	}
+	$out .= "\n";
+    }
+    $verboseText .= $out;
+}
 
 sub ByteSwapWords {
     my $data = $_[0];
     my $dataLength = length($data);
     for ( my $dataIndex = 0; $dataIndex < $dataLength; $dataIndex += 2 ) {
 	substr($data,$dataIndex,2) = pack("n",unpack("v",substr($data,$dataIndex,2)));
+    }
+    return $data;
+}
+
+sub ByteSwapLongs {
+    my $data = $_[0];
+    my $dataLength = length($data);
+    for ( my $dataIndex = 0; $dataIndex < $dataLength; $dataIndex += 4 ) {
+	substr($data,$dataIndex,4) = pack("N",unpack("V",substr($data,$dataIndex,4)));
     }
     return $data;
 }
@@ -540,16 +1015,23 @@ scdgstextract [options] <gstfile>
   Extracts various parts of the gst files for easier usage.
 
 [options]
+  -verbose           give details out to stdout
+  -verbosefiles      give details in file (<out>_verbose.txt)
   -all               extract everything
   -genesis           extract everything Genesis related (68k, z80, vdp)
   -megadrive         extract everything Genesis related (68k, z80, vdp)
-  -vdp               extract everything VDP related (cram, vsram, vram)
+  -68k               extract everything 68k related
+  -z80               extract everything z80 related
+  -vdp               extract everything VDP related
+  -reg68k            extract 68k registers
   -ram68k            extract 68k RAM
   -ramz80            extract z80 RAM
+  -regvdp            extract VDP registers
   -cram              extract CRAM
                      (gst stores as little endian, converts to big endian)
   -vsram             extract VSRAM
   -vram              extract VRAM
+  -ramfiles          make bin files for RAM (example: <out>_ram68k.bin)
   -png               make images for scroll a, window, scroll b, and sprites
   -pngcrush          use pngcrush to make smaller png files
   -composite         make composite image for VDP

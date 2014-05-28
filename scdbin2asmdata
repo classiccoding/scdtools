@@ -17,21 +17,66 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 ###############################################################################
 
+# TODO z80 support
+
 use strict;
 use warnings;
 
+my $z80 = 0;
+
 my $verbosity = 2;
 
-my $directive = 'dc.w';
+my $directive = '';
 my $directiveSize = -1;
 my $directiveCount = 8;
 
 my $binFileIn = '';
 my $asmFile = '';
+my $bin = 0;
+
+my $offset = 0;
+my $length = 0;
+my $end = 0;
+
+sub ArgNumber {
+    my ($type,$num) = @_;
+    my $value = 0;
+    if ( $num =~ /^(\d+)$/i ) {
+	$value = $1;
+    } elsif ( $num =~ /^(0x|\$)([0-9A-F]+)$/i ) {
+	$value = hex($2);
+    } else {
+	die "Bad num logic: ($type,$num)\n";
+    }
+    if ( $type eq '' || $type eq 'byte' ) {
+	# do nothing
+    } elsif ( $type eq 'word' ) {
+	$value *= 2;
+    } elsif ( $type eq 'long' ) {
+	$value *= 4;
+    } elsif ( $type eq 'pal' || $type eq 'tile' ) {
+	$value *= 32;
+    } else {
+	die "Bad type logic: ($type,$num)\n";
+    }
+    return $value;
+}
 
 my @args;
 foreach my $arg (@ARGV) {
-    if ( $arg =~ m/^-directive=(.+)$/i ) {
+    if ( $arg =~ /^-(|byte|word|long|pal|tile)offset=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$offset = &ArgNumber($1,$2);
+    } elsif ( $arg =~ /^-(|byte|word|long|pal|tile)length=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$length = &ArgNumber($1,$2);
+    } elsif ( $arg =~ /^-(|byte|word|long|pal|tile)end=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$end = &ArgNumber($1,$2);
+    } elsif ( $arg =~ m/^-z80$/i ) {
+	$z80 = 1;
+    } elsif ( $arg =~ m/^-68k$/i ) {
+	$z80 = 0;
+    } elsif ( $arg =~ m/^-bin$/i ) {
+	$bin = 1;
+    } elsif ( $arg =~ m/^-directive=(.+)$/i ) {
 	$directive = $1;
     } elsif ( $arg =~ m/^-directivesize=(\d+)$/i ) {
 	$directiveSize = $1;
@@ -44,21 +89,53 @@ foreach my $arg (@ARGV) {
     }
 }
 
-if ( $directiveSize <= 0 ) {
-    if ( $directive =~ /^dc\.b$/i ) {
-	$directiveSize = 1;
-    } elsif ( $directive =~ /^dc\.w$/i ) {
-	$directiveSize = 2;
-    } elsif ( $directive =~ /^dc\.l$/i ) {
-	$directiveSize = 4;
-    } else {
-	print STDERR "Cannot understand directive \"$directive\" and did not specify -directiveSize\n";
-	&Help();
+if ( ! $bin ) {
+    if ( $directive eq '' ) {
+	if ( $z80 ) {
+	    if ( $directiveSize == 1 ||
+		 $directiveSize < 0 ) {
+		$directive = 'db';
+		$directiveSize = 1;
+	    } elsif ( $directiveSize == 2 ) {
+		$directive = 'dw';
+	    } else {
+		print STDERR "Cannot understand directiveSize \"$directiveSize\" and did not specify -directive\n";
+		&Help();
+	    }
+	} else {
+	    if ( $directiveSize < 0 ) {
+	    } elsif ( $directiveSize == 1 ) {
+		$directive = 'dc.b';
+	    } elsif ( $directiveSize == 2 ||
+		      $directiveSize < 0 ) {
+		$directive = 'dc.w';
+		$directiveSize = 2;
+	    } elsif ( $directiveSize == 4 ) {
+		$directive = 'dc.l';
+	    } else {
+		print STDERR "Cannot understand directiveSize \"$directiveSize\" and did not specify -directive\n";
+		&Help();
+	    }
+	}
+    }
+    if ( $directiveSize <= 0 ) {
+	if ( $directive =~ /^dc\.b$/i ||
+	     $directive =~ /^db$/i ) {
+	    $directiveSize = 1;
+	} elsif ( $directive =~ /^dc\.w$/i ||
+		  $directive =~ /^dw$/i ) {
+	    $directiveSize = 2;
+	} elsif ( $directive =~ /^dc\.l$/i ) {
+	    $directiveSize = 4;
+	} else {
+	    print STDERR "Cannot understand directive \"$directive\" and did not specify -directiveSize\n";
+	    &Help();
+	}
     }
 }
 
-
-if ( $#args == 0 ) {
+if ( $#args == 0 && ! $bin ) {
+    # should not print out binary data
     $binFileIn = $args[0];
     $asmFile = '';
 } elsif ( $#args == 1 ) {
@@ -69,7 +146,7 @@ if ( $#args == 0 ) {
 }
 
 my $binFile = $binFileIn;
-if ( $binFileIn =~ m/\.(asm|68k)$/i ) {
+if ( $binFileIn =~ m/\.(asm|68k|z80)$/i ) {
     $binFile = 'TMP.BIN';
     system("scdasm -v=$verbosity $binFileIn $binFile");
     if ( ! -e $binFile ) {
@@ -79,29 +156,62 @@ if ( $binFileIn =~ m/\.(asm|68k)$/i ) {
 
 my $binSize = -s $binFile;
 
+if ( $end > 0 ) {
+    if ( $offset >= $end ) {
+	die "start before end...\n";
+    }
+    my $lengthNew = $end - $offset;
+    if ( $length > 0 && $length != $lengthNew ) {
+	die "specified length ($length) doesn't match specified offset ($offset) and specified end ($end)\n";
+    }
+    $length = $lengthNew;
+}
+if ( $offset + $length > $binSize ) {
+    die "Input offset($offset)/length($length) exceeds input file length($binSize)\n";
+}
+if ( $length <= 0 ) {
+    $length = $binSize - $offset;
+}
+
 my $asmData = '';
 if ( open(BIN, $binFile) ) {
     binmode BIN;
-    my $directiveIndex = 0;
-    my $directiveEntryValue = '';
-    for ( my $binIndex = 0; $binIndex < $binSize; $binIndex += $directiveSize ) {
-	# TODO ignore error for now
-	read(BIN,$directiveEntryValue,$directiveSize);
-	if ( $directiveIndex <= 0 ) {
-	    $asmData .= "\t$directive\t";
-	} else {
-	    $asmData .= ",";
+    if ( $offset ) {
+	seek(BIN,$offset,0);
+    }
+    if ( $bin ) {
+	$asmData = chr(0x00) x $length;
+	read(BIN,$asmData,$length);
+    } else {
+	my $directiveIndex = 0;
+	my $directiveEntryValue = '';
+	for ( my $binIndex = 0; $binIndex < $length; $binIndex += $directiveSize ) {
+	    # TODO ignore error for now
+	    read(BIN,$directiveEntryValue,$directiveSize);
+	    if ( $directiveIndex <= 0 ) {
+		$asmData .= "\t$directive\t";
+	    } else {
+		$asmData .= ",";
+	    }
+	    if ( $z80 && $directiveSize > 1 ) {
+		# reverse the endian
+		$directiveEntryValue = scalar reverse $directiveEntryValue;
+	    }
+	    if ( $z80 ) {
+		$asmData .= "0".uc(unpack("H*",$directiveEntryValue))."H";
+	    } else {
+		$asmData .= "\$".uc(unpack("H*",$directiveEntryValue));
+	    }
+	    $directiveIndex++;
+	    if ( $directiveIndex >= $directiveCount ) {
+		$asmData .= "\n";
+		$directiveIndex = 0;
+	    }
 	}
-	$asmData .= "\$".uc(unpack("H*",$directiveEntryValue));
-	$directiveIndex++;
-	if ( $directiveIndex >= $directiveCount ) {
+	if ( $directiveIndex >= 0 ) {
 	    $asmData .= "\n";
 	    $directiveIndex = 0;
 	}
-    }
-    if ( $directiveIndex >= 0 ) {
-	$asmData .= "\n";
-	$directiveIndex = 0;
     }
 }
 
@@ -116,6 +226,9 @@ if ( $asmFile eq '' || $asmFile eq '-' ) {
     print $asmData;
 } else {
     if ( open( ASM, '>'.$asmFile ) ) {
+	if ( $bin ) {
+	    binmode ASM;
+	}
 	print ASM $asmData;
     }
     close ASM;
@@ -132,7 +245,7 @@ scdbin2asmdata [options] <inputfile> [outputfile]
   extension, scdasm will be used to make a temporary binary file.  If no output
   file is given, the asm data will be piped to standard output.  Options
   allow changing the directives used to accomodate different styles and
-  assemblers.
+  assemblers.  Allows using a chunk of input file using offset/length.
 
 [sample output]
   the following is the default format for a single VDP palette (32 bytes)
@@ -140,10 +253,28 @@ scdbin2asmdata [options] <inputfile> [outputfile]
         dc.w    $0666,$0666,$0444,$0444,$0222,$0222,$0000,$0000
 
 [options]
-  -directive=<directive>   specifies directive, such as dc.b, dc.w, etc
-  -directivesize=<#>       number of bytes used in each directive entry
-  -directivecount=<#>      number of directive entries per line
-  -v=<#>                   specify verbosity
+  -z80                uses z80 byte order (little endian) and 0XXH format
+  -68k                uses 68k byte order (big endian) and $XX format
+  -directive=<dir>    specifies directive, such as dc.b, dc.w, etc
+  -directivesize=<#>  number of bytes used in each directive entry
+  -directivecount=<#> number of directive entries per line
+  -bin                outputs a binary file instead
+  -v=<#>              specify verbosity
+  -offset=<#>         byte offset in keyword file (default 0)
+  -length=<#>         byte length of keyword (default remainder of keyword file)
+  -end=<#>            byte end of keyword
+  -wordoffset=<#>     word offset in keyword file
+  -wordlength=<#>     word length of keyword
+  -wordend=<#>        word end in keyword file
+  -longoffset=<#>     long (4 byte) offset in keyword file
+  -longlength=<#>     long (4 byte) length of keyword
+  -longend=<#>        long (4 byte) end of keyword
+  -tileoffset=<#>     tile (32 byte) offset in keyword file
+  -tilelength=<#>     tile (32 byte) length of keyword
+  -tileend=<#>        tile (32 byte) end of keyword
+  -paloffset=<#>      pal (32 byte) offset in keyword file
+  -pallength=<#>      pal (32 byte) length of keyword
+  -palend=<#>         pal (32 byte) end of keyword
 
 ';
 }

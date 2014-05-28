@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 ###############################################################################
-# Copyright (c) 2011 by bgvanbur
+# Copyright (c) 2014 by bgvanbur
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -26,47 +26,40 @@ if ( $#ARGV != 2 ) {
     &Help();
 }
 
-my $updateFileName = $ARGV[0];
-my $updateOffset = $ARGV[1];
-my $replaceFileName = $ARGV[2];
+my $type = $ARGV[0];
+my $fileName = $ARGV[1];
+my $length = $ARGV[2];
 
-if ( $updateOffset =~ m/^(\$|0x)([0-9A-F]+)$/ ) {
-    $updateOffset = hex($2);
+if ( $length =~ m/^(\$|0x)([0-9A-F]+)$/ ) {
+    $length = hex($2);
 }
 
-my $replaceFileSize = -s $replaceFileName;
-
-if ( $replaceFileSize <= 0 ) {
-    exit;
+my $data;
+if ( $type =~ m/^00$/i ) {
+    $data = chr(0x00) x $length;
+} elsif ( $type =~ m/^ff$/i ) {
+    $data = chr(0xFF) x $length;
+} elsif ( $type =~ m/^tilepattern$/i ) {
+    $data = substr(((chr(0x01).chr(0x23).chr(0x45).chr(0x67).chr(0x89).chr(0xAB).chr(0xCD).chr(0xEF)) x (($length+7)>>3)),0,$length);
+} else {
+    die "invalid type: $type\n";
 }
 
-# TODO only replace part of the file as needed when I wanted to replace
-# the SCD fun part of the ISO
-# $replaceFileSize = 0x8000;
-
-open( REPLACE, "<$replaceFileName" ) or die "Cannot read $replaceFileName\n";
-
-my $replaceFileData = '';
-if ( read( REPLACE, $replaceFileData, $replaceFileSize ) != $replaceFileSize ) {
-    die "Cannot read all of $replaceFileName\n";
-}
-
-close REPLACE;
-
-open( UPDATE, "+<$updateFileName" ) or die "Cannot update $updateFileName\n";
-seek( UPDATE, $updateOffset, 0 );
-
-print UPDATE $replaceFileData;
-
-close UPDATE;
+open( FILE, ">$fileName" ) or die "Cannot write $fileName\n";
+binmode FILE;
+print FILE $data;
+close FILE;
 
 sub Help {
     die '
-scdupdatebinfile <updatefile> <updateoffset> <replacefile>
+scdbinempty <type> <file> <length>
 
 [description]
-  Replace part of a <updatefile> with the contents from <replacefile> at byte
-  position <updateoffset>.  Useful for overriding files in an ISO.
+  Make a file with zeros of size length
+
+<type>  00           fill with 0x00
+        ff           fill with 0xFF
+        tilepattern  fill with 0x0123456789ABCDEF
 
 ';
 }

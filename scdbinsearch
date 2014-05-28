@@ -1,0 +1,148 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2014 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+use strict;
+use warnings;
+
+my $offset = 0;
+my $end = 0;
+my $length = 0;
+my @files;
+
+sub ArgNumber {
+    my ($type,$num) = @_;
+    my $value = 0;
+    if ( $num =~ /^(\d+)$/i ) {
+	$value = $1;
+    } elsif ( $num =~ /^(0x|\$)([0-9A-F]+)$/i ) {
+	$value = hex($2);
+    } else {
+	die "Bad num logic: ($type,$num)\n";
+    }
+    if ( $type eq '' || $type eq 'byte' ) {
+	# do nothing
+    } elsif ( $type eq 'word' ) {
+	$value *= 2;
+    } elsif ( $type eq 'long' ) {
+	$value *= 4;
+    } elsif ( $type eq 'pal' || $type eq 'tile' ) {
+	$value *= 32;
+    } else {
+	die "Bad type logic: ($type,$num)\n";
+    }
+    return $value;
+}
+
+# parse args
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-(|byte|word|long|pal|tile)offset=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$offset = &ArgNumber($1,$2);
+    } elsif ( $arg =~ /^-(|byte|word|long|pal|tile)length=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$length = &ArgNumber($1,$2);
+    } elsif ( $arg =~ /^-(|byte|word|long|pal|tile)end=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$end = &ArgNumber($1,$2);
+    } elsif ( -e $arg ) {
+	push @files, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( $#files < 1 ) {
+    print STDERR "Need to specify some more files\n";
+    &Help();
+}
+
+my $keywordFile = shift @files;
+my $keywordFileSize = -s $keywordFile;
+
+if ( $end > 0 ) {
+    if ( $offset >= $end ) {
+	die "start before end...\n";
+    }
+    my $lengthNew = $end - $offset;
+    if ( $length > 0 && $length != $lengthNew ) {
+	die "specified length ($length) doesn't match specified offset ($offset) and specified end ($end)\n";
+    }
+    $length = $lengthNew;
+}
+if ( $offset + $length > $keywordFileSize ) {
+    die "Keyword offset/length exceeds keyword file length\n";
+}
+if ( $length <= 0 ) {
+    $length = $keywordFileSize - $offset;
+}
+if ( ! open(KEYWORD, $keywordFile) ) {
+    die "Could not properly open keyword file\n";
+}
+binmode KEYWORD;
+my $keywordData = chr(0x00) x $length;
+if ( ! seek(KEYWORD,$offset,0) ) {
+    die "Could not properly find start of keyword data\n";
+}
+if ( read(KEYWORD, $keywordData, $length) != $length ) {
+    die "Could not properly read keyword data\n";
+}
+close KEYWORD;
+
+foreach my $searchFile (<@files>) {
+    my $searchFileLength = -s $searchFile;
+    if ( $searchFileLength ) {
+	my $searchData = chr(0x00) x $searchFileLength;
+	open(SEARCH, $searchFile);
+	binmode SEARCH;
+	read(SEARCH,$searchData,$searchFileLength);
+	close SEARCH;
+	    
+	my $index = index($searchData,$keywordData);
+	while ( $index >= 0 ) {
+	    printf("$searchFile @ \$%4.4X\n",$index,$searchFileLength);
+	    $index = index($searchData,$keywordData,$index+1);
+	}
+    }
+}
+
+
+sub Help {
+    die '
+scdbinsearch [options] <keywordfile> <searchfiles>
+
+[description]
+  Search for a binary keyword chunk in binary search files(s).
+
+[options]
+  -offset=<#>         byte offset in keyword file (default 0)
+  -length=<#>         byte length of keyword (default remainder of keyword file)
+  -end=<#>            byte end in keyword file
+  -wordoffset=<#>     word offset in keyword file
+  -wordlength=<#>     word length of keyword
+  -wordend=<#>        word end in keyword file
+  -longoffset=<#>     long (4 byte) offset in keyword file
+  -longlength=<#>     long (4 byte) length of keyword
+  -longend=<#>        long (4 byte) end of keyword
+  -tileoffset=<#>     tile (32 byte) offset in keyword file
+  -tilelength=<#>     tile (32 byte) length of keyword
+  -tileend=<#>        tile (32 byte) end of keyword
+  -paloffset=<#>      pal (32 byte) offset in keyword file
+  -pallength=<#>      pal (32 byte) length of keyword
+  -palend=<#>         pal (32 byte) end of keyword
+
+';
+}

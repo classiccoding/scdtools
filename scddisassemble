@@ -1,0 +1,560 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2014 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# disassembler written in perl with goal of being supported by
+# asl, asm68k, SNASK68K and asmx while supporting optimized and unoptimized
+# sources
+###############################################################################
+
+# TODO does not handle labels well when using small part of larger code
+# TODO allow optimized code through instead of dc.w
+# TODO z80 support
+
+use strict;
+use warnings;
+
+# slight performance increase since not using floating point numbers at all
+use integer;
+
+# check that have at least 32 bit ints, only shift 30 bits since treated as
+# signed and don't want to deal with signed arithmetic shifting
+if ( ( ( 1 << 30 ) >> 30 ) != 1 ) {
+    die "Need at least 32 bit integer support\n";
+}
+
+use FindBin;
+use lib $FindBin::Bin;
+
+use SCDTools::DisCommon;
+use SCDTools::DisFormat;
+use SCDTools::Dis68K;
+use SCDTools::DisZ80;
+use SCDTools::DisPick;
+
+my $offset = -1;
+my $end = 0;
+my $length = 0;
+my $org = -1;
+my $orgFile = -1;
+
+my $all = 0;
+my $none = 0;
+my $genesisrom = 0;
+my @hexCodeFiles;
+my @pendingCodeAddresses;
+my @pendingCodeTables;
+my @listAsmx;
+my @listSNASM;
+my @listVasm;
+# TODO other types
+
+# 0: do nothing
+# 1: warn
+# 2: treat as invalid
+my $howToTreatUnused = 0;
+
+my @files;
+
+sub ArgNumber {
+    my ($type,$num) = @_;
+    my $value = 0;
+    if ( $num =~ /^(\d+)$/i ) {
+	$value = $1;
+    } elsif ( $num =~ /^(0x|\$)([0-9A-F]+)$/i ) {
+	$value = hex($2);
+    } else {
+	die "Bad num logic: ($type,$num)\n";
+    }
+    if ( $type eq '' || $type eq 'byte' ) {
+	# do nothing
+    } elsif ( $type eq 'word' ) {
+	$value *= 2;
+    } elsif ( $type eq 'long' ) {
+	$value *= 4;
+    } elsif ( $type eq 'pal' || $type eq 'tile' ) {
+	$value *= 32;
+    } else {
+	die "Bad type logic: ($type,$num)\n";
+    }
+    return $value;
+}
+
+&PickReset();
+
+# parse args
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-(68k|68000)$/i ) {
+	&PickCPU(CPU_68K);
+    } elsif ( $arg =~ m/^-z80$/i ) {
+	&PickCPU(CPU_Z80);
+    } elsif ( $arg =~ m/^-asl$/i ) {
+	&PickAssembler(ASM_ASL);
+    } elsif ( $arg =~ m/^-(asm68k|snasm|snasm68k)$/i ) {
+	&PickAssembler(ASM_SNASM68K);
+    } elsif ( $arg =~ m/^-asmx$/i ) {
+	&PickAssembler(ASM_ASMX);
+    } elsif ( $arg =~ m/^-gas$/i ) {
+	&PickAssembler(ASM_GAS);
+    } elsif ( $arg =~ m/^-gas_?mri$/i ) {
+	&PickAssembler(ASM_GAS_MRI);
+    } elsif ( $arg =~ m/^-pasmo$/i ) {
+	&PickAssembler(ASM_PASMO);
+    } elsif ( $arg =~ m/^-sjasm$/i ) {
+	&PickAssembler(ASM_SJASM);
+    } elsif ( $arg =~ m/^-tasm$/i ) {
+	&PickAssembler(ASM_TASM);
+    } elsif ( $arg =~ m/^-vasm$/i ) {
+	&PickAssembler(ASM_VASM);
+    } elsif ( $arg =~ m/^-z80asm$/i ) {
+	&PickAssembler(ASM_Z80ASM);
+    } elsif ( $arg =~ m/^-([ul])case$/i ) {
+	&SetCase(lc($1) eq 'l' ? 0 : 1);
+    } elsif ( $arg =~ m/^-([ul])casedir$/i ) {
+	&SetCaseDir(lc($1) eq 'l' ? 0 : 1);
+    } elsif ( $arg =~ m/^-([ul])casemnem$/i ) {
+	&SetCaseMnem(lc($1) eq 'l' ? 0 : 1);
+    } elsif ( $arg =~ m/^-([ul])casereg$/i ) {
+	&SetCaseReg(lc($1) eq 'l' ? 0 : 1);
+    } elsif ( $arg =~ m/^-([ul])caseimm$/i ) {
+	&SetCaseImm(lc($1) eq 'l' ? 0 : 1);
+    } elsif ( $arg =~ m/^-printaddresscommentsalways$/i ) {
+	&PrintAddressCommentsAlways(1);
+    } elsif ( $arg =~ m/-all$/i ) {
+	$all = 1;
+    } elsif ( $arg =~ m/-none$/i ) {
+	$none = 1;
+    } elsif ( $arg =~ m/-(genesis|md)rom$/i ) {
+	$genesisrom = 1;
+    } elsif ( $arg =~ m/^-code=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	my $addr = $1;
+	push @pendingCodeAddresses, &ArgNumber('',$addr);
+    } elsif ( $arg =~ m/^-codetbl=(.+)$/i ) {
+	my $codetbl = $1;
+	push @pendingCodeTables, $codetbl;
+    } elsif ( $arg =~ m/^-hexcode=(.+)$/i ) {
+	push @hexCodeFiles, $1;
+    } elsif ( $arg =~ m/^-li?stasmx=(.+)$/i ) {
+	push @listAsmx, $1;
+    } elsif ( $arg =~ m/^-li?st(?:asm68k|snasm|snasm68k)=(.+)$/i ) {
+	push @listSNASM, $1;
+    } elsif ( $arg =~ m/^-li?stvasm=(.+)$/i ) {
+	push @listVasm, $1;
+    } elsif ( $arg =~ m/^-(|byte|word|long|pal|tile)offset=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$offset = &ArgNumber($1,$2);
+    } elsif ( $arg =~ m/^-(|byte|word|long|pal|tile)length=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$length = &ArgNumber($1,$2);
+    } elsif ( $arg =~ m/^-(|byte|word|long|pal|tile)end=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$end = &ArgNumber($1,$2);
+    } elsif ( $arg =~ m/^-org=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$org = &ArgNumber('',$1);
+    } elsif ( $arg =~ m/^-orgfile=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
+	$orgFile = &ArgNumber('',$1);
+    } elsif ( -e $arg ) {
+	push @files, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( $#files != 0 ) {
+    &Help();
+}
+
+&PickComplete();
+&SaveCaseUser();
+
+my $binFile = $files[0];
+my $binLength = -s $binFile;
+
+if ( $org >= 0 && $orgFile >= 0 ) {
+    if ( $org < $orgFile ) {
+	die "specified org less than orgfile\n";
+    }
+    if ( $offset >= 0 ) {
+	if ( $org != $orgFile + $offset ) {
+	    die "specified offset, org, orgFile and they do not line up\n";
+	}
+    } else {
+	$offset = $org - $orgFile;
+    }
+}
+if ( $offset < 0 ) {
+    $offset = 0;
+}
+if ( $org < 0 ) {
+    if ( $orgFile >= 0 ) {
+	$org = $orgFile + $offset;
+    } else {
+	$org = $offset;
+    }
+}
+
+if ( $end > 0 ) {
+    if ( $offset >= $end ) {
+	die "start before end...\n";
+    }
+    my $lengthNew = $end - $offset;
+    if ( $length > 0 && $length != $lengthNew ) {
+	die "specified length ($length) doesn't match specified offset ($offset) and specified end ($end)\n";
+    }
+    $length = $lengthNew;
+}
+if ( $offset + $length > $binLength ) {
+    die "Keyword offset/length exceeds keyword file length\n";
+}
+if ( $length <= 0 ) {
+    $length = $binLength - $offset;
+}
+
+my $binData = chr(0x00) x $length;
+if ( open(BIN, $binFile) ) {
+    binmode BIN;
+    if ( ! seek(BIN,$offset,0) ) {
+	die "Could not properly find start of bin data\n";
+    }
+    if ( read(BIN,$binData,$length) != $length ) {
+	die "Could not properly read bin data\n";
+    }
+}
+close BIN;
+
+&SetOrg($org);
+&SetLength($length);
+
+&SetDataString($org,$binData,$length);
+
+&SetCodePointNice(1);
+
+foreach my $list (@listAsmx) {
+    # TODO expose copy comments?
+    # disabled since annoying when working on full disassembly
+    # checks for CODE comments which will be used as code points
+    # checks for any code to turn into code points
+    # copies labels but not equates
+    # converts incbins to condensed data points
+    my $copyComments = 0;
+    if ( open(FILE,$list) ) {
+	my $pendingCode = 0;
+	my $pendingComment = 0;
+	my $pendingComments = '';
+	my $line;
+	while ( $line = <FILE> ) {
+	    if ( $line =~ m/^\s*;;\s*(.+)\s*$/ ) {
+		my $comment = $1;
+		if ( $copyComments ) {
+		    $pendingComment = 1;
+		    $pendingComments .= &Disassemble_Comment($comment);
+		}
+		if ( $comment eq 'CODE' ) {
+		    $pendingComment = 1;
+		    $pendingCode = 1;
+		}
+	    } elsif ( $line =~ m/^\s*;;\s*CODE\s*$/ ) {
+		$pendingCode = 1;
+	    } elsif ( $line =~ m/^\s*([0-9A-F]+)\s+([A-Z0-9_]+)\:\s*$/i ) {
+		my $addr = hex($1);
+		my $label = $2;
+		&SetLabel($addr,$label);
+		&OrData($addr,DATA_USAGE_LABEL_CUSTOM);
+	    } elsif ( $pendingComment && $line =~ m/^\s*([0-9A-F]+)\s+([0-9A-F]+)\s+/i ) {
+		my $addr = hex($1);
+		if ( $copyComments ) {
+		    &AddComment($addr,$pendingComments);
+		}
+		if ( $pendingCode ) {
+		    if ( ! $copyComments ) {
+			&AddComment($addr,&Disassemble_Comment('CODELST'));
+		    }
+		    push @pendingCodeAddresses, $addr;
+		}
+		$pendingCode = 0;
+		$pendingComment = 0;
+		$pendingComments = '';
+	    } elsif ( $line =~ m/^\s*([0-9A-F]+) [0-9A-F]{4} /i &&
+		      $line !~ m/\sdc\.[bwl]\s/i ) {
+		# TODO doesn't work on Z80 since opcode can be 2 or 4 nibbles
+		# TODO disabled for now anyways
+		# my $addr = hex($1);
+		# push @pendingCodeAddresses, $addr;
+	    } elsif ( $line =~ m/^\s*([0-9A-F]+)\s+\(([0-9A-F]+)\)\s+(incbin\s+.*)$/i ) {
+		my $addr = hex($1);
+		my $width = hex($2);
+		my $incbin = $3;
+		# TODO not needed for Z80
+		# force on word boundaries
+		if ( $addr & 1 ) {
+		    $addr++;
+		    $width--;
+		}
+		if ( $width & 1 ) {
+		    $width--;
+		}
+		if ( $width >= 2 ) {
+		    &SetDataPoint($addr,$width);
+		    &AddComment($addr,"\n".&Disassemble_Comment($incbin));
+		    &SetAssembly($addr,&Disassemble_Data_Word($addr,$width));
+		}
+	    }
+	}
+    }
+    close FILE;
+}
+
+foreach my $list (@listSNASM) {
+    # TODO incbin support, requires multi line parsing
+    # 0003C628                            BlocksTitleScreenLZ2:
+    # 0003C628                            	incbin	blockstitlescreen.lz2
+    # 0003CB72                            TilesTitleScreenPart1LZ4:	
+    my $copyComments = 0;
+    if ( open(FILE,$list) ) {
+	my $pendingCode = 0;
+	my $pendingComment = 0;
+	my $pendingComments = '';
+	my $line;
+	while ( $line = <FILE> ) {
+	    if ( $line =~ m/^([0-9A-F]+)\s*;;\s*(.+)$/ ) {
+		my $addr = hex($1);
+		my $comment = $2;
+		$comment =~ s/(\s|\r|\n|\x0d)*$//;
+		if ( $copyComments ) {
+		    &AddComment($addr,$pendingComments);
+		}
+		if ( $comment eq 'CODE' ) {
+		    if ( ! $copyComments ) {
+			&AddComment($addr,&Disassemble_Comment('CODELST'));
+		    }
+		    push @pendingCodeAddresses, $addr;
+		}
+	    } elsif ( $line =~ m/^\s*([0-9A-F]+)\s+([A-Z0-9_]+)\:\s*$/i ) {
+		my $addr = hex($1);
+		my $label = $2;
+		&SetLabel($addr,$label);
+		&OrData($addr,DATA_USAGE_LABEL_CUSTOM);
+	    } elsif ( $line =~ m/^\s*([0-9A-F]+)\s[\s0-9A-F]{24}\s+([A-Z0-9\.]+)\s/i ) {
+		my $addr = hex($1);
+		my $mnem = $2;
+		if ( &Disassembly_MnemCheck($mnem) ) {
+		    push @pendingCodeAddresses, $addr;
+		}
+	    }
+	}
+    }
+    close FILE;
+}
+
+if ( ! $none ) {
+
+    # useful for genesis ROMs that have addresses of executable locations
+    if ( $genesisrom ) {
+	&SCDTools::Dis68K::GenesisROM();
+    }
+
+    &ProcessCodePointCache();
+
+    # useful for address.log generated by blastem -l
+    foreach my $hexCodeFile (@hexCodeFiles) {
+	if ( open(FILE,$hexCodeFile) ) {
+	    my $line;
+	    while ( $line = <FILE> ) {
+		chomp $line;
+		if ( $line =~ m/^\s*([0-9A-F]+)\s*$/i ) {
+		    my $addr = hex($1);
+		    &AddToCodePointCache($addr);
+		}
+	    }
+	}
+	close FILE;
+    }
+
+    &ProcessCodePointCache();
+
+    foreach my $addr (@pendingCodeAddresses) {
+	&CodePoint($addr);
+    }
+
+    foreach my $codetbl (@pendingCodeTables) {
+	my $start = -1;
+	my $end = -1;
+	if ( $codetbl =~ m/(^|,)start\:([\d+|(0x|\$)[0-9A-F]+)(,|$)/i ) {
+	    my $num = $2;
+	    $start = &ArgNumber('',$num);
+	}
+	if ( $codetbl =~ m/(^|,)end\:([\d+|(0x|\$)[0-9A-F]+)(,|$)/i ) {
+	    my $num = $2;
+	    $end = &ArgNumber('',$num);
+	}
+	if ( $codetbl =~ m/(^|,)length\:([\d+|(0x|\$)[0-9A-F]+)(,|$)/i ) {
+	    my $num = $2;
+	    my $length = &ArgNumber('',$num);
+	    if ( $start >= 0 && $end >= 0 && $length != $end - $start ) {
+		die "codetbl specified start, end, and length but do not correspond: $codetbl\n";
+	    }
+	    if ( $start < 0 && $end >= 0 ) {
+		$start = $end - $length;
+	    }
+	    if ( $end < 0 && $start >= 0 ) {
+		$end = $start + $length;
+	    }
+	}
+	if ( $start < 0 || $end < 0 ) {
+	    die "codetbl requires at least two specifiers for start/end/length:  $codetbl\n";
+	}
+	my $entrySize = -1;
+	if ( $codetbl =~ m/(^|,)entrysize\:([\d+|(0x|\$)[0-9A-F]+)(,|$)/i ) {
+	    my $num = $2;
+	    $entrySize = &ArgNumber('',$num);
+	}
+	if ( $entrySize < 0 ) {
+	    die "codetbl requires entrysize: $codetbl\n";
+	}
+	my $offset = 0;
+	if ( $codetbl =~ m/(^|,)offset\:([\d+|(0x|\$)[0-9A-F]+)(,|$)/i ) {
+	    my $num = $2;
+	    $offset = &ArgNumber('',$num);
+	}
+	&AddComment($start,&Disassemble_Comment('codetbl='.$codetbl));
+	for ( my $addr = $start; $addr < $end; $addr += $entrySize ) {
+	    my $problem = DIS_PRBM_NONE;
+	    my $label;
+	    my $str;
+	    my $addrPointer;
+	    if ( $entrySize == 1 ) {
+		$addrPointer = $offset + &GetByte($addr);
+		($problem,$label) = &LabelGeneric($problem,$addrPointer);
+		if ( ! $problem && $label ne '' ) {
+		    $str = &Disassemble_Data_Byte_Expr($label);
+		} else {
+		    $str = &Disassemble_Data_Byte($addr,$entrySize);
+		}
+	    } elsif ( $entrySize == 2 ) {
+		$addrPointer = $offset + &GetWord($addr);
+		($problem,$label) = &LabelGeneric($problem,$addrPointer);
+		if ( ! $problem && $label ne '' ) {
+		    $str = &Disassemble_Data_Word_Expr($label);
+		} else {
+		    $str = &Disassemble_Data_Word($addr,$entrySize);
+		}
+	    } elsif ( $entrySize == 4 ) {
+		$addrPointer = $offset + &GetLong($addr);
+		($problem,$label) = &LabelGeneric($problem,$addrPointer);
+		if ( ! $problem && $label ne '' ) {
+		    $str = &Disassemble_Data_Long_Expr($label);
+		} else {
+		    $str = &Disassemble_Data_Long($addr,$entrySize);
+		}
+	    } else {
+		die "Unsupported codetbl entrysize: $entrySize\n";
+	    }
+	    &SetAssembly($addr,$str);
+	    &SetDataPoint($addr,$entrySize);
+	    &AddToCodePointCache($addrPointer);
+	}
+    }
+
+    &ProcessCodePointCache();
+
+    if ( &GetCodePointsDisassembled() > 0 ) {
+	&Disassembly_NiceCheck();
+	&UsageStats();
+    }
+
+    # if no code points attempted, then convert all data into code points
+    # ignore any failures since we will also be converting data
+    &SetCodePointNice(0);
+    if ( $all || &GetCodePointsAttempted() == 0 ) {
+	&AttemptCodePointsAll();
+	&UsageStats();
+    }
+}
+
+&PrintDisassembly();
+
+
+
+
+###############################################################################
+# Help
+###############################################################################
+
+sub Help {
+# TODO add these?
+#  -deccode=<file>       list of decimal code addresses
+#  -hexdata=<file>       list of hexadecimal data addresses
+#  -decdata=<file>       list of decimal data addresses
+
+    die '
+scdasmall [options] <binfile>
+
+[description]
+  ensure several assemblers all have the same binary output for an asmfile
+
+[cpu options]
+  -68k                specify 68k disassembling (default)
+  -z80                specify z80 disassembling
+[assembler options]
+  -asl                asl (68k, z80)
+  -asm68k             asm68k (68k)
+  -asmx               asmx (68k, z80)
+  -gas                gnu assembler (68k, z80)
+  -gasmri             gnu assembler using --mri option (68k)
+  -pasmo              pasmo (z80)
+  -sjasm              sjasm (z80)
+  -snasm68k           SNASM68K (68k)
+  -tasm               tasm (z80)
+  -vasm               vasm (68k, z80)
+                      [requires build after May 2, 2014 for z80 compatibility]
+  -z80asm             z80asm (z80)
+[format options]
+  -lcase              lower case directives, mnems, registers, and immediates
+  -ucase              upper case directives, mnems, registers, and immediates
+  -lcasedir           lower case directives
+  -ucasedir           upper case directives
+  -lcasemnem          lower case mnems
+  -ucasemnem          upper case mnems
+  -lcasereg           lower case registers
+  -ucasereg           upper case registers
+  -lcaseimm           lower case immediates
+  -ucaseimm           upper case immediates
+  -printaddresscommentsalways   always print address comments, good for debug
+[options]
+  -all                process all data as code
+                      done if no other code points specified and no -none
+  -none               processes no code points
+  -code=<#>           process address as code        
+  -genesisrom         use Genesis ROM header format for code points
+  -hexcode=<file>     list of hexadecimal code addresses
+
+  -offset=<#>         byte offset in keyword file (default 0)
+  -length=<#>         byte length of keyword (default remainder of keyword file)
+  -end=<#>            byte end in keyword file
+  -wordoffset=<#>     word offset in keyword file
+  -wordlength=<#>     word length of keyword
+  -wordend=<#>        word end in keyword file
+  -longoffset=<#>     long (4 byte) offset in keyword file
+  -longlength=<#>     long (4 byte) length of keyword
+  -longend=<#>        long (4 byte) end of keyword
+  -tileoffset=<#>     tile (32 byte) offset in keyword file
+  -tilelength=<#>     tile (32 byte) length of keyword
+  -tileend=<#>        tile (32 byte) end of keyword
+  -paloffset=<#>      pal (32 byte) offset in keyword file
+  -pallength=<#>      pal (32 byte) length of keyword
+  -palend=<#>         pal (32 byte) end of keyword
+
+';
+}

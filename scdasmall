@@ -27,32 +27,59 @@ use warnings;
 # for those running natively can use short name if assembler is in your path
 # Which($) allows short names for wine/dosbox executables in your path
 
-#my $asmx = 'asmx-2.0b5';
 my $asmx = &Which('asmx');
 
 my $z80 = 0;
-
-# set any of the following to '' to disable
-my $asmxbgv = &Which('asmx-bgv');
+my $cleanup = 1;
 
 # 68k only assemblers
 my $asm68k = &Which('asm68k.exe');
 my $snasm68k = &Which('SNASM68K.EXE');
 my $asl = &Which('asl');
+my $vasmm68k_mot = &Which('vasmm68k_mot');
+my $gas68kelf_as = &Which('m68k-elf-as');
+my $gas68kelf_ld = &Which('m68k-elf-ld');
+if ( $gas68kelf_ld eq '' ) {
+    $gas68kelf_as = '';
+}
 
 # z80 only assemblers
 my $z80asm = &Which('z80asm');
 my $pasmo = &Which('pasmo');
+my $vasmz80_oldstyle = &Which('vasmz80_oldstyle');
+my $tasm = &Which('TASM.EXE');
+my $sjasm = &Which('sjasm');
+my $gasz80coff_as = &Which('z80-unknown-coff-as');
+my $gasz80coff_ld = &Which('z80-unknown-coff-ld');
+if ( $gasz80coff_ld eq '' ) {
+    $gasz80coff_as = '';
+}
 
-# used for asl post processing
-my $s2p2bin = &Which('s2p2bin');
+# used for win/dos executables
+my $wine = &Which('wine');
+my $dosbox = &Which('dosbox');
 
-my $asm68kopts = '/o op+ /o os+ /o ow+ /o oz+ /o oaq+ /o osq+ /o omq+';
-my $snasm68kopts = '-o op+ -o os+ -o ow+ -o oz+ -o oaq+ -o osq+ -o omq+';
+#my $asm68kopts = '/o op+ /o os+ /o ow+ /o oz+ /o oaq+ /o osq+ /o omq+';
+my $asm68kopts = '/o ow+ ';
+#my $snasm68kopts = '-o op+ -o os+ -o ow+ -o oz+ -o oaq+ -o osq+ -o omq+';
+my $snasm68kopts = '-o ow+';
+
+#op- 	Enable PC relative optimizations. Switch to PC relative addressing when absolute long addressing is used and the code allows such a switch.
+#os- 	Enable short branch optimizations. Backwards relative branches will use the short form if possible.
+#ow- 	Enable absolute word addressing optimizations. If absolute long addressing is specified, but the address will fit in a word, the shorter form is used. Optimization is not made if the size is specified.
+#oz- 	Enable zero displacement (offset-zero) optimizations. If an instruction uses the Indirect Addressing with Displacement addressing mode and the displacement is zero, the instruction will be assembled to Indirect Addressing mode.
+#oaq- 	Enable ADDQ optimizations. ADD instructions that can be coded as ADDQ instructions will be assembled as ADDQ instructions.
+#osq- 	Enable SUBQ optimizations. Like above. 
 
 # just the short file name
 my $snasm68kShort = $snasm68k;
 $snasm68kShort =~ s/^(.*[\\\/])//g;
+
+my $asm68kShort = $asm68k;
+$asm68kShort =~ s/^(.*[\\\/])//g;
+
+my $tasmShort = $tasm;
+$tasmShort =~ s/^(.*[\\\/])//g;
 
 my @files;
 
@@ -61,6 +88,8 @@ foreach my $arg (@ARGV) {
 	$z80 = 0;
     } elsif ( $arg =~ m/^-z80$/i ) {
 	$z80 = 1;
+    } elsif ( $arg =~ m/^-nocleanup$/i ) {
+	$cleanup = 0;
     } elsif ( $arg =~ /-asm68kopts=(.*)$/ ) {
 	$asm68kopts = $1;
     } elsif ( $arg =~ /-snasm68kopts=(.*)$/ ) {
@@ -68,55 +97,35 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg eq '-unopt' ) {
 	$asm68kopts = '';
 	$snasm68kopts = '';
-    } else {
+    } elsif ( -e $arg ) {
 	push @files, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
     }
 }
 
-if ( $#files != 0 ) {
+if ( $#files != 0 && $#files != 1 ) {
     &Help();
 }
 
+&Clean();
+
 my $asm = $files[0];
+my $target = $#files == 1 ? $files[1] : 'asmx.bin';
 
 # baseline sure still works with original asmx
-if ( $z80 ) {
-    system("$asmx -C z80 -b 0 -e -w -o asmx.bin -- $asm");
-} else {
-    system("$asmx -C 68000 -b 0 -e -w -o asmx.bin -- $asm");
-}
-
-my $rc0 = 0;
-if ( $asmxbgv ne '' ) {
-    # using bgv improvements to asmx that I typically use
+if ( $asmx ne '' ) {
+    &Running('asmx');
     if ( $z80 ) {
-	system("$asmxbgv -pu1 -pa0 -C z80 -b 0 -e -w -o asmxbgv.bin -- $asm");
+	system("$asmx -C z80 -b 0 -e -w -o asmx.bin -- $asm");
     } else {
-	system("$asmxbgv -pu1 -pa0 -C 68000 -b 0 -e -w -o asmxbgv.bin -- $asm");
+	system("$asmx -C 68000 -b 0 -e -w -o asmx.bin -- $asm");
     }
-    $rc0 = system("diff asmx.bin asmxbgv.bin");
 }
 
-my $rc1 = 0;
-if ( ! $z80 && $asm68k ne '' ) {
-    # wine runs fine, so don't need dosbox
-    #print("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin\n");
-    system("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin");
-    $rc1 = system("diff asmx.bin asm68k.bin");
-}
-
-my $rc2 = 0;
-if ( ! $z80 && $snasm68k ne '' ) {
-    # wine can't run, so need to make a bat file to run command with options
-    # copy to local directory so that local directory is mounted
-    system("cp $snasm68k .");
-    system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN > SNASM68K.OUT' > SNASM68K.BAT");
-    system("dosbox SNASM68K.BAT -exit");
-    $rc2 = system("diff asmx.bin SNASM68K.BIN");
-}
-
-my $rc3 = 0;
-if ( ! $z80 && $asl ne '' ) {
+if ( $asl ne '' ) {
+    &Running('asl');
     if ( open(TMPASM, ">asl.asm") ) {
 	print TMPASM "
 incbin	macro	file
@@ -130,73 +139,249 @@ even	macro
 ";
     }
     close TMPASM;
-    system("asl -cpu 68000 -xx -c -A asl.asm -o asl.p -shareout asl.h");
-    system("s2p2bin asl.p asl.bin asl.h");
-    $rc3 = system("diff asmx.bin asl.bin");
+    my $cpu = $z80 ? 'z80' : '68000';
+    system("asl -cpu $cpu -xx -a -A asl.asm -o asl.p -L -olist asl.lst -E asl.err");
+    # note: p2bin is released as part of asl
+    # -r $-$ means min to max addresses, need to \\ for perl and \$ for perl
+    # to convert to \$ so shell doesn't interpret $
+    system("p2bin -r \\\$-\\\$ asl.p asl.bin ");
 }
 
-my $rc4 = 0;
+if ( ! $z80 && $vasmm68k_mot ne '' ) {
+    &Running('vasmm68k_mot');
+    system("vasmm68k_mot $asm -Fbin -m68000 -no-opt -o vasmm68k.bin");
+}
+
+if ( $z80 && $vasmz80_oldstyle ne '' ) {
+    &Running('vasmz80_oldstyle');
+    system("vasmz80_oldstyle $asm -Fbin -o vasmz80.bin");
+}
+
+if ( ! $z80 && $gas68kelf_as ne '' ) {
+    &Running('gas68kelf --mri');
+    system("echo 'BASE 0' > gas68k.mri");
+    system("$gas68kelf_as -m68000 --mri -o gas68kmri.o $asm");
+    system("$gas68kelf_ld -c gas68k.mri -nostdlib --oformat binary -o gas68kmri.bin gas68kmri.o");
+    &Running('gas68kelf');
+    system("echo 'BASE 0' > gas68k.mri");
+    system("$gas68kelf_as -m68000 -o gas68k.o $asm");
+    system("$gas68kelf_ld -c gas68k.mri -nostdlib --oformat binary -o gas68k.bin gas68k.o");
+}
+
+if ( $z80 && $gasz80coff_as ne '' ) {
+    &Running('gasz80coff');
+    system("$gasz80coff_as -o gasz80.o $asm");
+    system("$gasz80coff_ld -nostdlib --oformat binary -o gasz80.bin gasz80.o");
+}
+
+if ( ! $z80 && $asm68k ne '' ) {
+    # wine runs fine, so don't need dosbox
+    #print("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin\n");
+    # doesn't work on dosbox since Win32 exe
+    if ( $wine ne '' ) {
+	&Running('asm68k');
+	system("wine $asm68k /k /p /o w+ $asm68kopts $asm, asm68k.bin");
+    } else {
+	$asm68k = '';
+    }
+}
+
+if ( ! $z80 && $snasm68k ne '' ) {
+    if ( $dosbox ne '' ) {
+	&Running('snasm68k');
+	# wine can't run, so need to make a bat file to run command with options
+	# copy to local directory so that local directory is mounted
+	system("cp $snasm68k .");
+	# listing file takes forever on large assemblies
+	# system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN, SNASM68K.MAP, SNASM68K.LST > SNASM68K.OUT' > SNASM68K.BAT");
+	# -o w+
+	system("echo '$snasm68kShort -k -p -o w- $snasm68kopts $asm, SNASM68K.BIN > SNASM68K.OUT' > SNASM68K.BAT");
+	system("dosbox SNASM68K.BAT -exit");
+    } else {
+	$snasm68k = '';
+    }
+}
+
 if ( $z80 && $z80asm ne '' ) {
+    &Running('z80asm');
     system("z80asm $asm --output=z80asm.bin");
-    $rc4 = system("diff asmx.bin asmx.bin");
 }
 
-my $rc5 = 0;
 if ( $z80 && $pasmo ne '' ) {
+    &Running('pasmo');
     system("pasmo $asm pasmo.bin");
-    $rc5 = system("diff asmx.bin pasmo.bin");
+}
+
+if ( $z80 && $tasm ne '' ) {
+    if ( $dosbox ne '' ) {
+	&Running('tasm');
+	# wine can't run, so need to make a bat file to run command with options
+	# copy to local directory so that local directory is mounted
+	system("cp $tasm .");
+	my $tasm80 = $tasm;
+	$tasm80 =~ s/TASM.EXE$/TASM80.TAB/;
+	system("cp $tasm80 .");
+	# listing file takes forever on large assemblies
+	# system("echo '$snasm68kShort -k -p -o w+ $snasm68kopts $asm, SNASM68K.BIN, SNASM68K.MAP, SNASM68K.LST > SNASM68K.OUT' > SNASM68K.BAT");
+	# -o w+
+	system("echo '$tasmShort -80 -b $asm TASM.BIN > TASM.OUT' > TASM.BAT");
+	system("dosbox TASM.BAT -exit");
+    } else {
+	$tasm = '';
+    }
+}
+
+if ( $z80 && $sjasm ne '' ) {
+    &Running('sjasm');
+    system("sjasm $asm sjasm.bin");
 }
 
 print "\n";
 
-# see if clean diffs, if so clean up files and report it was clean
-if ( ! $rc0 && ! $rc1 && ! $rc2 && ! $rc3 && ! $rc4 && ! $rc5 ) {
-    system("rm asmx.bin");
-    if ( $asmxbgv ne '' ) {
-	system("rm asmxbgv.bin");
+my $rc0 = &Compare(    1,'asmx',            $asmx,            $target,'asmx.bin');
+my $rc1 = &Compare(    1,'asl',             $asl,             $target,'asl.bin');
+my $rc2 = &Compare(!$z80,'vasmm68k_mot',    $vasmm68k_mot,    $target,'vasmm68k.bin');
+my $rc3 = &Compare( $z80,'vasmz80_oldstyle',$vasmz80_oldstyle,$target,'vasmz80.bin');
+my $rc4 = &Compare(!$z80,'gas68kelf_mri',   $gas68kelf_as,    $target,'gas68kmri.bin');
+my $rc5 = &Compare(!$z80,'gas68kelf',       $gas68kelf_as,    $target,'gas68k.bin');
+my $rc6 = &Compare( $z80,'gasz80coff',      $gasz80coff_as,   $target,'gasz80.bin');
+my $rc7 = &Compare(!$z80,'asm68k',          $asm68k,          $target,'asm68k.bin');
+my $rc8 = &Compare(!$z80,'snasm68k',        $snasm68k,        $target,'SNASM68K.BIN');
+my $rc9 = &Compare( $z80,'z80asm',          $z80asm,          $target,'z80asm.bin');
+my $rcA = &Compare( $z80,'pasmo',           $pasmo,           $target,'pasmo.bin');
+my $rcB = &Compare( $z80,'tasm',            $tasm,            $target,'TASM.BIN');
+my $rcC = &Compare( $z80,'sjasm',           $sjasm,           $target,'sjasm.bin');
+
+# see if clean cmps, if so clean up files and report it was clean
+if ( $rc0 && $rc1 && $rc2 && $rc3 && $rc4 && $rc5 && $rc6 && $rc7 && $rc8 && $rc9 && $rcA && $rcB && $rcC ) {
+    if ( $cleanup ) {
+	&Clean();
     }
-    if ( ! $z80 && $asm68k ne '' ) {
-	system("rm asm68k.bin");
-    }
-    if ( ! $z80 && $snasm68k ne '' ) {
-	system("rm $snasm68kShort");
-	system("rm SNASM68K.BAT");
-	system("rm SNASM68K.BIN");
-    }
-    if ( ! $z80 && $asl ne '' ) {
-	system("rm asl.asm");
-	system("rm asl.p");
-	system("rm asl.h");
-	system("rm asl.bin");
-    }
-    if ( $z80 && $z80asm ne '' ) {
-	system("rm z80asm.bin");
-    }
-    if ( $z80 && $pasmo ne '' ) {
-	system("rm pasmo.bin");
-    }
-    print "All clean\n";
+    print "scdasmall success: all clean\n";
 }
 
 print "\n";
+
 
 
 ###############################################################################
 
 
+
+sub Compare {
+    my ($used,$toolName,$tool,$bin0,$bin1) = @_;
+    my $rc = 1;
+    if ( $used && $tool ne '' ) {
+	if ( ! -e $bin0 ) {
+	    print STDERR "scdasmall failure for $toolName: did not make $bin0\n";
+	    $rc = 0;
+	}
+	if ( ! -e $bin1 ) {
+	    print STDERR "scdasmall failure for $toolName: did not make $bin1\n";
+	    $rc = 0;
+	}
+	if ( $rc ) {
+	    if ( system("cmp -s $bin0 $bin1") ) {
+		print STDERR "scdasmall failure for $toolName: difference between $bin0 $bin1\n";
+		$rc = 0;
+	    }
+	}
+    }
+    return $rc;
+}
+
+sub Running {
+    print (('='x79)."\n".$_[0]."\n".('='x79)."\n");
+}
+
+
+sub Clean {
+    if ( $asmx ne '' ) {
+	system("rm -f asmx.bin");
+    }
+    if ( $asl ne '' ) {
+	system("rm -f asl.asm");
+	system("rm -f asl.p");
+	system("rm -f asl.bin");
+	system("rm -f asl.inc");
+	system("rm -f asl.lst");
+	system("rm -f asl.err");
+    }
+    if ( ! $z80 && $vasmm68k_mot ) {
+	system("rm -f vasmm68k.bin");
+    }
+    if ( $z80 && $vasmz80_oldstyle ) {
+	system("rm -f vasmz80.bin");
+    }
+    if ( ! $z80 && $gas68kelf_as ) {
+	system("rm -f gas68k.mri");
+	system("rm -f gas68k.o");
+	system("rm -f gas68k.bin");
+    }
+    if ( $z80 && $gasz80coff_as ) {
+	system("rm -f gasz80.o");
+	system("rm -f gasz80.bin");
+    }
+    if ( ! $z80 && $asm68k ne '' ) {
+	system("rm -f asm68k.bin");
+    }
+    if ( ! $z80 && $snasm68k ne '' ) {
+	system("rm -f $snasm68kShort");
+	system("rm -f SNASM68K.BAT");
+	system("rm -f SNASM68K.OUT");
+	system("rm -f SNASM68K.BIN");
+	system("rm -f SNASM68K.MAP");
+	system("rm -f SNASM68K.LST");
+    }
+    if ( $z80 && $z80asm ne '' ) {
+	system("rm -f z80asm.bin");
+    }
+    if ( $z80 && $pasmo ne '' ) {
+	system("rm -f pasmo.bin");
+    }
+    if ( $z80 && $tasm ne '' ) {
+	system("rm -f $tasmShort");
+	system("rm -f TASM.BAT");
+	system("rm -f TASM.OUT");
+	system("rm -f TASM.BIN");
+	system("rm -f TASM.MAP");
+	system("rm -f TASM.LST");
+    }
+    if ( $z80 && $sjasm ne '' ) {
+	system("rm -f sjasm.bin");
+    }
+}
+
 sub Which($) {
     my ($file) = @_;
-    my $value = `which $file`;
+    my $value = `which $file 2> /dev/null`;
     chomp $value;
     return $value;
 }
 
 sub Help {
     die '
-scdasmall [options] <asmfile>
+scdasmall [options] <asmfile> [<binfile>]
 
 [description]
   ensure several assemblers all have the same binary output for an asmfile
+
+[supported assemblers]
+  [68k]
+    asl
+    asmx
+    vasmm68k_mot
+    m68k-elf-* (gas)
+    SNASM68K (dosbox)
+    asm68k (wine)
+  [z80]
+    asmx
+    pasmo
+    sjasm
+    vasmz80_oldstyle
+    z80asm
+    z80-unknown-coff-* (gas)
+    tasm (dosbox)
 
 [options]
   -68k                  specify 68k assembling (default)
@@ -204,6 +389,10 @@ scdasmall [options] <asmfile>
   -asm68kopts=<opts>    opts to pass to asm68k
   -snasm68kopts=<opts>  opts to pass to snasm68k
   -unopt                do not send optimization opts to assemblers
+  -nocleanup            do not clean up successful assembles (default is to clean)
+
+  <asmfile>             file to assemble
+  [<binfile>]           optional file to compare against (defaults to asmx.bin)
 
 ';
 }
