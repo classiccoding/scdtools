@@ -51,6 +51,7 @@ my $end = 0;
 my $length = 0;
 my $org = -1;
 my $orgFile = -1;
+my $asmFile = '';
 
 my $all = 0;
 my $none = 0;
@@ -164,6 +165,8 @@ foreach my $arg (@ARGV) {
 	$org = &ArgNumber('',$1);
     } elsif ( $arg =~ m/^-orgfile=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
 	$orgFile = &ArgNumber('',$1);
+    } elsif ( $arg =~ m/^-asmfile=(.+)$/ ) {
+	$asmFile = $1;
     } elsif ( -e $arg ) {
 	push @files, $arg;
     } else {
@@ -483,7 +486,7 @@ if ( ! $none ) {
     }
 }
 
-&PrintDisassembly();
+&PrintDisassembly($asmFile);
 
 
 

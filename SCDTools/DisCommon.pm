@@ -631,6 +631,15 @@ sub PrintAddressCommentsAlways {
 }
 
 sub PrintDisassembly {
+    my ($asmFile) = @_;
+
+    my $asmHandle;
+    if ( $asmFile ne '' ) {
+	open($asmHandle,'>'.$asmFile);
+    } else {
+	$asmHandle = *STDOUT;
+    }
+
     # group output for every 1024 bytes worth of data
     my $output = '';
 
@@ -649,7 +658,7 @@ sub PrintDisassembly {
 
     for ( my $i = 0; $i < $dataLength; $i++ ) {
 	if ( ( $i & 0x0003FF ) == 0 && $i > 0 && $output ne '' ) {
-	    print $output;
+	    print $asmHandle $output;
 	    $output = '';
 	}
 	my $addr = $org + $i * $dataValueAlign;
@@ -702,8 +711,12 @@ sub PrintDisassembly {
 	}
     }
     if ( $output ne '' ) {
-	print $output;
+	print $asmHandle $output;
 	$output = '';
+    }
+
+    if ( $asmFile ne '' ) {
+	close $asmHandle;
     }
 }
 

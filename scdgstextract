@@ -1021,12 +1021,12 @@ scdgstextract [options] <gstfile>
   -genesis           extract everything Genesis related (68k, z80, vdp)
   -megadrive         extract everything Genesis related (68k, z80, vdp)
   -68k               extract everything 68k related
+  -68kreg            extract 68k registers
+  -68kram            extract 68k RAM
   -z80               extract everything z80 related
+  -z80ram            extract z80 RAM
   -vdp               extract everything VDP related
-  -reg68k            extract 68k registers
-  -ram68k            extract 68k RAM
-  -ramz80            extract z80 RAM
-  -regvdp            extract VDP registers
+  -vdpreg            extract VDP registers
   -cram              extract CRAM
                      (gst stores as little endian, converts to big endian)
   -vsram             extract VSRAM
