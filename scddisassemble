@@ -536,6 +536,8 @@ scdasmall [options] <binfile>
   -ucaseimm           upper case immediates
   -printaddresscommentsalways   always print address comments, good for debug
 [options]
+  -asmfile=<file>     specify file to save disassembly code to
+                      (defaults to STDOUT if not specified)
   -all                process all data as code
                       done if no other code points specified and no -none
   -none               processes no code points
