@@ -1376,10 +1376,11 @@ sub Disassemble68K {
 		    } elsif ( ( $mode & 0x0030 ) == 0x0020 ) {
 			# MOVE USP
 			my $ea = &Disassemble68K_An($reg);
+			# asm68k requires size (weird SNASM68K doesn't though)
 			if ( $mode == 0x0020 ) {
-			    $inst = &Disassemble_Instruction('MOVE',$ea,$regUSP);
+			    $inst = &Disassemble_Instruction('MOVE.L',$ea,$regUSP);
 			} elsif ( $mode == 0x0028 ) {
-			    $inst = &Disassemble_Instruction('MOVE',$regUSP,$ea);
+			    $inst = &Disassemble_Instruction('MOVE.L',$regUSP,$ea);
 			} else {
 			    die "Bad logic (MOVE USP)\n";
 			}
