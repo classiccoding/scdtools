@@ -40,6 +40,7 @@ my $codePointsAttempted = 0;
 my $codePointsBytes = 0;
 my $codePointsBytesUnoptimized = 0;
 my $codePointNice = 0;
+my $codePointStrict = 0;
 
 my $dataPointsBytes = 0;
 
@@ -136,11 +137,15 @@ our @EXPORT = qw(
   GetCodePointsDisassembled
   GetCodePointNice
   SetCodePointNice
+  GetCodePointStrict
+  SetCodePointStrict
   AddToCodePointCache
+  AddToCodePointCacheLinked
   CodePoint
   ProcessCodePointCache
   AttemptCodePointsAll
   PreviousInst
+  CodePointCacheStats
   UsageStats
 
   AddUnoptimizedBytes
@@ -465,6 +470,7 @@ sub LabelGeneric {
     } else {
 	$problem = DIS_PRBM_TODO_BAD;
 	$label = '?';
+	# $label = sprintf($labelGenericFormat,$addr);
     }
     return ($problem,$label);
 }
@@ -508,11 +514,25 @@ sub SetCodePointNice {
     $codePointNice = $_[0];
 }
 
+sub GetCodePointStrict {
+    return $codePointStrict;
+}
+
+sub SetCodePointStrict {
+    $codePointStrict = $_[0];
+}
+
 
 # useful for Disassembly functions as a shortcut to adding other code points
 # for branches, jumps, subroutines and sequential code
 sub AddToCodePointCache {
     if ( $codePointNice ) {
+	push @codePointCache, @_;
+    }
+}
+
+sub AddToCodePointCacheLinked {
+    if ( $codePointNice && ! $codePointStrict ) {
 	push @codePointCache, @_;
     }
 }
@@ -598,7 +618,7 @@ sub CodePointRun {
 	    $codePointsDisassembled++;
 	    $codePointsBytes += $width;
 	    if ( $seq & DATA_USAGE_NEXT_SEQUENTIAL ) {
-		&AddToCodePointCache($addr+$width);
+		&AddToCodePointCacheLinked($addr+$width);
 	    }
 	} else {
 	    # failure to disassemble

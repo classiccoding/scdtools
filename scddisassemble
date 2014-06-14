@@ -139,6 +139,8 @@ foreach my $arg (@ARGV) {
 	$all = 1;
     } elsif ( $arg =~ m/-none$/i ) {
 	$none = 1;
+    } elsif ( $arg =~ m/-strict$/i ) {
+	&SetCodePointStrict(1);
     } elsif ( $arg =~ m/-(genesis|md)rom$/i ) {
 	$genesisrom = 1;
     } elsif ( $arg =~ m/^-code=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
@@ -244,6 +246,8 @@ close BIN;
 
 &SetCodePointNice(1);
 
+my $listCodePointCount = 0;
+
 foreach my $list (@listAsmx) {
     # TODO expose copy comments?
     # disabled since annoying when working on full disassembly
@@ -295,6 +299,7 @@ foreach my $list (@listAsmx) {
 		# TODO disabled for now anyways
 		# my $addr = hex($1);
 		# push @pendingCodeAddresses, $addr;
+		# $listCodePointCount++;
 	    } elsif ( $line =~ m/^\s*([0-9A-F]+)\s+\(([0-9A-F]+)\)\s+(incbin\s+.*)$/i ) {
 		my $addr = hex($1);
 		my $width = hex($2);
@@ -354,11 +359,16 @@ foreach my $list (@listSNASM) {
 		my $mnem = $2;
 		if ( &Disassembly_MnemCheck($mnem) ) {
 		    push @pendingCodeAddresses, $addr;
+		    $listCodePointCount++;
 		}
 	    }
 	}
     }
     close FILE;
+}
+
+if ( $listCodePointCount > 0 ) {
+    print STDERR sprintf("Code Points From List: %d\n",$listCodePointCount);
 }
 
 if ( ! $none ) {
@@ -541,6 +551,9 @@ scdasmall [options] <binfile>
   -all                process all data as code
                       done if no other code points specified and no -none
   -none               processes no code points
+  -strict             only does specified addresses, does not do any
+                      disassembling for sequential instruction or branch
+                      targets
   -code=<#>           process address as code        
   -genesisrom         use Genesis ROM header format for code points
   -hexcode=<file>     list of hexadecimal code addresses

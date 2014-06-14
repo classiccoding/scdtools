@@ -103,8 +103,7 @@ if ( ! $bin ) {
 		&Help();
 	    }
 	} else {
-	    if ( $directiveSize < 0 ) {
-	    } elsif ( $directiveSize == 1 ) {
+	    if ( $directiveSize == 1 ) {
 		$directive = 'dc.b';
 	    } elsif ( $directiveSize == 2 ||
 		      $directiveSize < 0 ) {

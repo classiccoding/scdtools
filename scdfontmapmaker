@@ -1,0 +1,81 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2014 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# convert images to asm files for megadrive/megacd development
+###############################################################################
+
+use strict;
+use warnings;
+
+my $fontText = '';
+my $text = '';
+my $mapWidth = 1;
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ m/^-fonttext=(.+)$/ ) {
+	$fontText = $1;
+    } elsif ( $arg =~ m/^-text=(.+)$/ ) {
+	$text = $1;
+    } elsif ( $arg =~ m/^-mapwidth=([12])$/ ) {
+	$mapWidth = hex($1);
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( $text eq '' ||
+     $fontText eq '' ) {
+    &Help();
+}
+
+my $textLength = length($text);
+for ( my $i = 0; $i < $textLength; $i++ ) {
+    my $character = substr($text,$i,1);
+    my $index = index($fontText,$character);
+    if ( $index < 0 ) {
+	die "font does not contain character: $character\n";
+    }
+    if ( $mapWidth == 1 ) {
+	if ( $index > 0xFF ) {
+	    die "Bad font index for map width of one\n";
+	}
+	printf("\tdc.b\t\$%2.2X\n",$index);
+    } else {
+	if ( $index > 0x7FF ) {
+	    die "Bad font index for map width of two\n";
+	}
+	printf("\tdc.w\t\$%2.2X\n",$index);
+    }
+}
+
+
+
+sub Help {
+    die '
+scdfontmapmaker
+
+[description]
+  make tile maps targetted easy usage of font maps
+
+[options]
+  -fonttext=text   text in order of font tiles
+  -text=text       text you want to convert into tile map
+
+';
+}

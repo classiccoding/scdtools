@@ -274,12 +274,14 @@ sub Img2Tile($) {
 		my $tileIndex = &ReadImgTile($x,$y);
 		if ( $tileMapWidth == 1 ) {
 		    if ( $tileIndex < 0 || $tileIndex > 0xFF ) {
+			print "$tileIndex\n";
 			$tileMapWidthBad = 1;
 		    } else {
 			$tileMapRow .= chr($tileIndex);
 		    }
 		} elsif ( $tileMapWidth == 2 ) {
 		    if ( $tileIndex < 0 || $tileIndex > 0xFFFF ) {
+			print "$tileIndex\n";
 			$tileMapWidthBad = 1;
 		    } else {
 			$tileMapRow .= pack("n",$tileIndex);

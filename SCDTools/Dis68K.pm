@@ -446,7 +446,7 @@ sub Disassemble68K_EffectiveAddress {
 		    }
 		}
 		if ( $code ) {
-		    &AddToCodePointCache($target);
+		    &AddToCodePointCacheLinked($target);
 		}
 	    } else {
 		$problem |= DIS_PRBM_UNSUPPORTED;
@@ -523,7 +523,7 @@ sub Disassemble68K_EffectiveAddress {
 			    $ea = $label;
 			}
 			if ( $code ) {
-			    &AddToCodePointCache($target);
+			    &AddToCodePointCacheLinked($target);
 			}
 		    } else {
 			if ( $optimizable ) {
@@ -552,6 +552,9 @@ sub Disassemble68K_EffectiveAddress {
 		    $ea = sprintf("%s@(%s)",$regPC,$label);
 		} else {
 		    $ea = sprintf("%s(%s)",$label,$regPC);
+		}
+		if ( $code ) {
+		    &AddToCodePointCacheLinked($target);
 		}
 	    } else {
 		$problem |= DIS_PRBM_UNSUPPORTED;
@@ -590,6 +593,11 @@ sub Disassemble68K_EffectiveAddress {
 			}
 		    } else {
 			$ea = sprintf("%s(%s,%s%s)",$label,$regPC,$strRegX,$strSize);
+		    }
+		    if ( $code ) {
+			if ( &GetCodePointNice() ) {
+			    &AddComment($target,"\n".&Disassemble_Comment('CODETBL'));
+			}
 		    }
 		}
 	    } else {
@@ -1484,7 +1492,7 @@ sub Disassemble68K {
 		    $seq = DATA_USAGE_NEXT_SEQUENTIAL;
 		} else {
 		    $seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
-		    &AddToCodePointCache($target);
+		    &AddToCodePointCacheLinked($target);
 		}
 	    } else {
 		# Scc
@@ -1562,7 +1570,7 @@ sub Disassemble68K {
 	    $inst = &Disassemble_Instruction($mnem.$strSize,$labelTarget);
 	    $seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 	}
-	&AddToCodePointCache($target);
+	&AddToCodePointCacheLinked($target);
     } elsif ( $opHi == 0x7000 ) {
 	# 0b0111
 	if ( $opLo == 0x0000 ) {
@@ -1904,7 +1912,7 @@ sub GenesisROM {
 	&SetAssembly($addr,$str);
 	&SetDataPoint($addr,0x04);
 	if ( $vectorUsed ) {
-	    &AddToCodePointCache($addrPointer);
+	    &AddToCodePointCacheLinked($addrPointer);
 	}
     }
 
@@ -2000,7 +2008,7 @@ sub GenesisROM {
 }
 
 sub CheckForCodeTables {
-    my ($addr,$reg) = @_;
+    my ($addr,$reg,$asmCurrent) = @_;
     # check for CODETBL based on previous instructions
     # example MOVEA.L LABEL(PC,D0.W),An followed by JMP(An)
     my $addrPrev = &PreviousInst($addr);
@@ -2018,6 +2026,8 @@ sub CheckForCodeTables {
 	} elsif ( $asm =~ /^\s*(?:MOVEA\.L|ADDA\.[WL])\s*0\(A([0-7]),D[0-7](?:\.[WL])?\),A([0-7])\s*$/i ) {
 	    # ADDA uses offsets from table start
 	    # MOVEA points to actual location
+	    # TODO does not check if simple sequential instructions
+	    #      such as shift instructions on index are put in between
 	    my $areg1 = $1;
 	    my $areg2 = $2;
 	    if ( $areg2 == $reg ) {

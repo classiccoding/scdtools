@@ -506,7 +506,7 @@ sub DisassembleZ80 {
 			$seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 			$problem |= $unsupportedIfIndexing;
 			if ( ! $problem ) {
-			    &AddToCodePointCache($target);
+			    &AddToCodePointCacheLinked($target);
 			}
 		    } else {
 			my $n_value;
@@ -518,7 +518,7 @@ sub DisassembleZ80 {
 			$seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 			$problem |= $unsupportedIfIndexing;
 			if ( ! $problem ) {
-			    &AddToCodePointCache($target);
+			    &AddToCodePointCacheLinked($target);
 			}
 		    }
 		} else {
@@ -532,7 +532,7 @@ sub DisassembleZ80 {
 		    $seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 		    $problem |= $unsupportedIfIndexing;
 		    if ( ! $problem ) {
-			&AddToCodePointCache($target);
+			&AddToCodePointCacheLinked($target);
 		    }
 		}
 	    } elsif ( $z == 0x01 ) {
@@ -692,7 +692,7 @@ sub DisassembleZ80 {
 		$seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 		$problem |= $unsupportedIfIndexing;
 		if ( ! $problem ) {
-		    &AddToCodePointCache($target);
+		    &AddToCodePointCacheLinked($target);
 		}
 	    } elsif ( $z == 0x03 ) {
 		if ( $y == 0x00 ) {
@@ -711,7 +711,7 @@ sub DisassembleZ80 {
 		    $seq = DATA_USAGE_NEXT_NONSEQUENTIAL;
 		    $problem |= $unsupportedIfIndexing;
 		    if ( ! $problem ) {
-			&AddToCodePointCache($target);
+			&AddToCodePointCacheLinked($target);
 		    }
 		} elsif ( $y == 0x08 ) {
 		    die "Bad Z80 CB detection\n";
@@ -748,7 +748,7 @@ sub DisassembleZ80 {
 		$seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 		$problem |= $unsupportedIfIndexing;
 		if ( ! $problem ) {
-		    &AddToCodePointCache($target);
+		    &AddToCodePointCacheLinked($target);
 		}
 	    } elsif ( $z == 0x05 ) {
 		if ( $q == 0x00 ) {
@@ -767,7 +767,7 @@ sub DisassembleZ80 {
 			$seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 			$problem |= $unsupportedIfIndexing;
 			if ( ! $problem ) {
-			    &AddToCodePointCache($target);
+			    &AddToCodePointCacheLinked($target);
 			}
 		    } else {
 			# do nothing byte value is 0xDD, 0xED, or 0xFD
@@ -801,7 +801,7 @@ sub DisassembleZ80 {
 		$seq = DATA_USAGE_NEXT_CONDSEQUENTIAL;
 		$problem |= $unsupportedIfIndexing;
 		if ( ! $problem ) {
-		    &AddToCodePointCache($target);
+		    &AddToCodePointCacheLinked($target);
 		}
 	    }
 	}
