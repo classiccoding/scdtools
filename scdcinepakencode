@@ -103,8 +103,6 @@ my $cinepakSampleData = '';
 
 my $pcmFrameSize = 0x4000;
 
-my $pcmFileSize = 0;
-
 my $pcmFrameIndex = 0;
 my @pcmFrameFiles;
 

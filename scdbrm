@@ -1,0 +1,123 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+my $blockSize = 0x40;
+my $bramSize = 0x2000;
+
+foreach my $fileIn (@ARGV) {
+
+    my $fileInData = '';
+    my $fileInLength = -s $fileIn;
+
+    my $fileOut = 'out.bin';
+    my $fileOutData = '';
+
+    open(FILEIN, '<'.$fileIn);
+    binmode FILEIN;
+    read(FILEIN,$fileInData,$fileInLength);
+    close FILEIN;
+
+    my $bramData = substr($fileInData,0,$bramSize);
+
+    &BRAMDecodeDirectory($bramData);
+
+    for ( my $index = 0; $index + $blockSize <= $fileInLength; $index += $blockSize ) {
+	my $block = substr($fileInData,$index,$blockSize);
+	my $decoded = &BRAMDecodeDataProtectedBlock($block);
+	$fileOutData .= $decoded;
+    }
+
+    open(FILEOUT, '>'.$fileOut);
+    binmode FILEOUT;
+    print FILEOUT $fileOutData;
+    close FILEOUT;
+}
+
+
+sub BRAMDecodeDirectory {
+    my ($bramData) = @_;
+    # TODO format check?
+    my $bramDataLength = length($bramData);
+    if ( $bramDataLength & 0x3F ) {
+	die "Bad bram\n";
+    }
+    my $lastBlockIndex = $bramDataLength - $blockSize;
+    my $blocksFree = unpack("n",substr($bramData,$lastBlockIndex+0x10,2));
+    if ( $blocksFree != unpack("n",substr($bramData,$lastBlockIndex+0x12,2)) ||
+	 $blocksFree != unpack("n",substr($bramData,$lastBlockIndex+0x14,2)) ||
+	 $blocksFree != unpack("n",substr($bramData,$lastBlockIndex+0x16,2)) ) {
+	print STDERR "Inconsistent blocks free value\n";
+	return;
+    }
+    my $filesUsed = unpack("n",substr($bramData,$lastBlockIndex+0x18,2));
+    if ( $filesUsed != unpack("n",substr($bramData,$lastBlockIndex+0x1A,2)) ||
+	 $filesUsed != unpack("n",substr($bramData,$lastBlockIndex+0x1C,2)) ||
+	 $filesUsed != unpack("n",substr($bramData,$lastBlockIndex+0x1E,2)) ) {
+	print STDERR "Inconsistent files used value\n";
+	return;
+    }
+    my $directoryIndex = $lastBlockIndex - $filesUsed * 0x20;
+    if ( $filesUsed > 0 ) {
+	print "+-------------+----+-------+------+\n";
+	print "| FILENAME    | DP | INDEX | SIZE |\n";
+	print "+-------------+----+-------+------+\n";
+	for ( my $i = $directoryIndex; $i < $lastBlockIndex; $i += 0x20 ) {
+	    my $block = substr($bramData,$i & 0xFFFFC0,$blockSize);
+	    my $decoded = &BRAMDecodeDataProtectedBlock($block);
+	    my $entry = substr($decoded,($i & 0x3F) >> 1,0x10);
+	    my $fileName = substr($entry,0,11);
+	    my $fileDatProt = ord(substr($entry,11,1));
+	    my $fileBlockStart = unpack("n",substr($entry,12,2));
+	    my $fileBlockSize = unpack("n",substr($entry,14,2));
+	    printf("| %s | %2.2X |  %4.4X | %4.4X |\n",$fileName,$fileDatProt,$fileBlockStart,$fileBlockSize);
+	    
+	    my $fileData = '';
+	    for ( my $j = 0; $j < $fileBlockSize; $j++ ) {
+		my $block = substr($bramData,($j+$fileBlockStart) * $blockSize,$blockSize);
+		if ( $fileDatProt ) {
+		    $block = &BRAMDecodeDataProtectedBlock($block);
+		}
+		$fileData .= $block;
+	    }
+	    if ( open(SAV, '>'.$fileName.'.SAV') ) {
+		binmode SAV;
+		print SAV $fileData;
+	    }
+	    close SAV;
+	}
+	print "+-------------+----+-------+------+\n";
+    }
+}
+
+
+
+
+sub BRAMDecodeDataProtectedBlock {
+    my ($dataIn) = @_;
+    if ( length($dataIn) != $blockSize ) {
+	die "Bad block\n";
+    }
+    my $dataOut = '';
+    my $bitsCollector = 0;
+    my $bitsCollected = 0;
+    my $dataInIndex = 2;
+    my $bytesCollected = 0;
+
+    $bitsCollector = ( ord(substr($dataIn,$dataInIndex++,1)) & 0x0C ) << 12;
+    $bitsCollected = 2;
+
+    while ( $bytesCollected < 0x20 ) {
+	$bitsCollector = $bitsCollector | ( ( ord(substr($dataIn,$dataInIndex++,1)) & 0xFC ) << ( 8 - $bitsCollected ) );
+	$bitsCollected += 6;
+	if ( $bitsCollected >= 8 ) {
+	    $dataOut .= chr( ( $bitsCollector >> 8 ) & 0x00FF );
+	    $bytesCollected++;
+	    $bitsCollector = $bitsCollector << 8;
+	    $bitsCollected -= 8;
+	}
+    }
+    
+    return $dataOut;
+}

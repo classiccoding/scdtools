@@ -245,6 +245,7 @@ sub ImgExtractColors($) {
 	print "Image only has $colorsLength VDP colors\n";
     }
 
+    print "$ditherFinal\n";
     if ( $ditherFinal eq 'none' ) {
 	$img->Remap('image'=>$imgPalette,dither=>'false');
     } elsif ( $ditherFinal eq 'r' ) {

@@ -49,6 +49,8 @@ sub ArgNumber {
     return $value;
 }
 
+my $keywordData = '';
+
 # parse args
 foreach my $arg (@ARGV) {
     if ( $arg =~ /^-(|byte|word|long|pal|tile)offset=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
@@ -57,6 +59,8 @@ foreach my $arg (@ARGV) {
 	$length = &ArgNumber($1,$2);
     } elsif ( $arg =~ /^-(|byte|word|long|pal|tile)end=([\d+|(0x|\$)[0-9A-F]+)$/i ) {
 	$end = &ArgNumber($1,$2);
+    } elsif ( $arg =~ /^-keyword=(0x|\$)([0-9A-F]+)$/i ) {
+	$keywordData = pack("H*",$2);
     } elsif ( -e $arg ) {
 	push @files, $arg;
     } else {
@@ -65,42 +69,45 @@ foreach my $arg (@ARGV) {
     }
 }
 
-if ( $#files < 1 ) {
+if ( $#files < 0 ||
+     ( $keywordData eq '' && $#files < 1 ) ) {
     print STDERR "Need to specify some more files\n";
     &Help();
 }
 
-my $keywordFile = shift @files;
-my $keywordFileSize = -s $keywordFile;
+if ( $keywordData eq '' ) {
+    my $keywordFile = shift @files;
+    my $keywordFileSize = -s $keywordFile;
 
-if ( $end > 0 ) {
-    if ( $offset >= $end ) {
-	die "start before end...\n";
+    if ( $end > 0 ) {
+	if ( $offset >= $end ) {
+	    die "start before end...\n";
+	}
+	my $lengthNew = $end - $offset;
+	if ( $length > 0 && $length != $lengthNew ) {
+	    die "specified length ($length) doesn't match specified offset ($offset) and specified end ($end)\n";
+	}
+	$length = $lengthNew;
     }
-    my $lengthNew = $end - $offset;
-    if ( $length > 0 && $length != $lengthNew ) {
-	die "specified length ($length) doesn't match specified offset ($offset) and specified end ($end)\n";
+    if ( $offset + $length > $keywordFileSize ) {
+	die "Keyword offset/length exceeds keyword file length\n";
     }
-    $length = $lengthNew;
+    if ( $length <= 0 ) {
+	$length = $keywordFileSize - $offset;
+    }
+    if ( ! open(KEYWORD, $keywordFile) ) {
+	die "Could not properly open keyword file\n";
+    }
+    binmode KEYWORD;
+    $keywordData = chr(0x00) x $length;
+    if ( ! seek(KEYWORD,$offset,0) ) {
+	die "Could not properly find start of keyword data\n";
+    }
+    if ( read(KEYWORD, $keywordData, $length) != $length ) {
+	die "Could not properly read keyword data\n";
+    }
+    close KEYWORD;
 }
-if ( $offset + $length > $keywordFileSize ) {
-    die "Keyword offset/length exceeds keyword file length\n";
-}
-if ( $length <= 0 ) {
-    $length = $keywordFileSize - $offset;
-}
-if ( ! open(KEYWORD, $keywordFile) ) {
-    die "Could not properly open keyword file\n";
-}
-binmode KEYWORD;
-my $keywordData = chr(0x00) x $length;
-if ( ! seek(KEYWORD,$offset,0) ) {
-    die "Could not properly find start of keyword data\n";
-}
-if ( read(KEYWORD, $keywordData, $length) != $length ) {
-    die "Could not properly read keyword data\n";
-}
-close KEYWORD;
 
 foreach my $searchFile (<@files>) {
     my $searchFileLength = -s $searchFile;
@@ -123,6 +130,7 @@ foreach my $searchFile (<@files>) {
 sub Help {
     die '
 scdbinsearch [options] <keywordfile> <searchfiles>
+scdbinsearch -keyword=<#> <searchfiles>
 
 [description]
   Search for a binary keyword chunk in binary search files(s).

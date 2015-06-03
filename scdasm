@@ -40,6 +40,8 @@ foreach my $arg (@ARGV) {
 	$z80 = 1;
     } elsif ( $arg =~ m/^-vasm$/i ) {
 	$asm = 'vasm';
+    } elsif ( $arg =~ m/^-vasmunopt$/i ) {
+	$asm = 'vasmunopt';
     } elsif ( $arg =~ m/^-asm68k_?wine$/i ) {
 	$asm = 'asm68k_wine';
     } elsif ( $arg =~ m/^-asmx$/i ) {
@@ -76,6 +78,19 @@ if ( $asm eq 'asmx' ) {
 	&Help();
     }
 } elsif ( $asm eq 'vasm' ) {
+    if ( $#args == 1 ) {
+	my $asm = $args[0];
+	my $bin = $args[1];
+	$cmd68k = "vasmm68k_mot -quiet -Fbin -m68000 $options -o $bin $asm";
+	$cmdz80 = "vasmz80_oldstyle -quiet -Fbin $options -o $bin $asm";
+    } elsif ( $#args == 2 ) {
+	my $asm = $args[0];
+	my $bin = $args[1];
+	my $lst = $args[2];
+	$cmd68k = "vasmm68k_mot -quiet -Fbin -m68000 $options -o $bin $asm -L $lst";
+	$cmdz80 = "vasmz80_oldstyle -quiet -Fbin $options -o $bin $asm -L $lst";
+    }
+} elsif ( $asm eq 'vasmunopt' ) {
     if ( $#args == 1 ) {
 	my $asm = $args[0];
 	my $bin = $args[1];
@@ -140,6 +155,10 @@ scdasm [options] <asmfile> <binfile> [lstfile]
   -v=<#>               specify verbosity
   -options=<options>   options to send to assembler
   -nowarnings          disable assembler warnings
+
+  -vasm                use vasm (vasmm68k_mot or vasmz80_oldstyle)
+  -vasmunopt           use vasm unopt (vasmm68k_mot or vasmz80_oldstyle)
+  -asm68kwine          use asm68k under wine
 
 ';
 }

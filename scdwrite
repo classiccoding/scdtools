@@ -26,7 +26,11 @@
 use strict;
 use warnings;
 
-if ( $#ARGV >= 0 ) {
+my $swap = 0;
+
+if ( $#ARGV == 0 && $ARGV[0] =~ /^-swap$/i ) {
+    $swap = 1;
+} elsif ( $#ARGV >= 0 ) {
     &Help();
 }
 
@@ -190,8 +194,15 @@ if ( $#bins == 0 && $#cues == 0 ) {
 
 # now burn the sega cd (guide already set to toc/cue accordingly to format)
 
+my $options = '';
+if ( $swap ) {
+    $options = ' --swap';
+}
+my $cmd = "cdrdao write$options --speed 1 --driver generic-mmc \"$guide\"";
+
 # burn at 1x
-system("cdrdao write --speed 1 --driver generic-mmc \"$guide\"");
+print "Running: $cmd\n";
+system($cmd);
 
 # delete any generated files we made
 # we keep the cue/toc since its a small file anyways
@@ -204,10 +215,14 @@ if ( $deleteCreatedFiles ) {
 
 sub Help {
     die '
-scdwrite
+scdwrite [options]
 
 [description]
   Write a CD-R with the data for Sega CD.
+
+[options]
+
+  -swap   passes --swap to cdrdao
 
 ';
 }

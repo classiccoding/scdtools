@@ -215,6 +215,8 @@ my $ramfiles = 0;
 my $png = 0;
 my $pngcrush = 0;
 my $composite = 0;
+my $forceSegaCD = 0;
+my $force32X = 0;
 
 my @gstFiles;
 
@@ -317,17 +319,62 @@ foreach my $gstFile (@gstFiles) {
 	die "Bad GST header: $gstFile\n";
     }
 
+    # 00050 : Version (Genecyst=0 ; Kega=5 ; Gens=5)
+    # 6,7,8,9...
+    my $version = ord(substr($gstData,0x00050,1));
+
     # 00052 : System ID (Genesis=0 ; SegaCD=1 ; 32X=2 ; SegaCD32X=3)
     my $system = ord(substr($gstData,0x00052,1));
-    my $gstOffsetSegaCD = 0x22478;
-    my $gstOffset32X = 0x22478;
+
+    # http://code.google.com/p/gens-rerecording/source/browse/branches/multiplat/common/save.h
+    # http://code.google.com/p/gens-rerecording/source/browse/branches/multiplat/common/save.cpp
+
+    my $gstLengthGenesis;
+    my $gstLengthSegaCD;
+    my $gstLength32X;
+    if ( $version >= 9 ) {
+	$gstLengthGenesis = 0x34380;
+	$gstLengthSegaCD  = 0xF3D40;
+	$gstLength32X     = 0x849E0;
+    } elsif ( $version >= 8 ) {
+	$gstLengthGenesis = 0x34353;
+	$gstLengthSegaCD  = 0xF3D2F;
+	$gstLength32X     = 0x849BF;
+    } elsif ( $version >= 7 ) {
+	$gstLengthGenesis = 0x3434E;
+	$gstLengthSegaCD  = 0xF3D2F;
+	$gstLength32X     = 0x849BF;
+    } elsif ( $version >= 6 ) {
+	$gstLengthGenesis = 0x22C68;
+	$gstLengthSegaCD  = 0xF3D2F;
+	$gstLength32X     = 0x849BF;
+    } else {
+	$gstLengthGenesis = 0x22478;
+	$gstLengthSegaCD  = 0xE0000;
+	$gstLength32X     = 0x82A00;
+    }
+
+    my $gstOffsetSegaCD = $gstLengthGenesis;
+    my $gstOffset32X    = $gstLengthGenesis;
+
+    # override system if file length matches length specified by gst version
+    # since not saved by later versions
+    if ( $gstFileLength == $gstLengthGenesis ) {
+	$system = 0;
+    } elsif ( $gstFileLength == $gstLengthGenesis + $gstLengthSegaCD ) {
+	$system = 1;
+    } elsif ( $gstFileLength == $gstLengthGenesis + $gstLength32X ) {
+	$system = 2;
+    } elsif ( $gstFileLength == $gstLengthGenesis + $gstLengthSegaCD + $gstLength32X ) {
+	$system = 3;
+    }
 
     # reduce extractSpecified to extract based on system defined in gst
     my $extract = $extractSpecified & EXTRACT_GEN;
     if ( $system & 0x01 ) {
 	$extract |= $extractSpecified & EXTRACT_SCD;
 	# TODO assumes sega cd is before 32x part, not clearly specified
-	$gstOffset32X += 0xE0000;
+	$gstOffset32X += $gstLengthSegaCD;
     }
     if ( $system & 0x02 ) {
 	$extract |= $extractSpecified & EXTRACT_32X;
@@ -898,6 +945,59 @@ foreach my $gstFile (@gstFiles) {
     if ( $extract & EXTRACT_GENVDPVRAM ) {
 	&VerboseRAM('VRAM ',$vram,1,16,1,4);
     }
+
+    if ( $extract & EXTRACT_SCD68KREG ) {
+	# TODO implement
+	my $regd = &ByteSwapLongs(substr($gstData,$gstOffsetSegaCD+0x00000,8*4));
+	my $rega = &ByteSwapLongs(substr($gstData,$gstOffsetSegaCD+0x00020,8*4));
+	my $regpc = &ByteSwapLongs(substr($gstData,$gstOffsetSegaCD+0x00048,4));
+	my $regsr = &ByteSwapWords(substr($gstData,$gstOffsetSegaCD+0x00050,2));
+	my $regusp = &ByteSwapLongs(substr($gstData,$gstOffsetSegaCD+0x00052,4));
+	my $regssp = &ByteSwapLongs(substr($gstData,$gstOffsetSegaCD+0x00056,4));
+	&VerboseRAM('REGSCD68K  D',$regd,4,4,4,1);
+	&VerboseRAM('REGSCD68K  A',$rega,4,4,4,1);
+	&VerbosePrintF("REGSCD68K  PC = %8.8X\n",unpack("N",$regpc));
+	&VerbosePrintF("REGSCD68K  SR = %4.4X\n",unpack("n",$regsr));
+	&VerbosePrintF("REGSCD68K USP = %8.8X\n",unpack("N",$regusp));
+	&VerbosePrintF("REGSCD68K SSP = %8.8X\n",unpack("N",$regssp));
+    }
+
+    if ( $extract & EXTRACT_SCDPROGRAMRAM ) {
+	# swap bytes to convert from little endian to big endian
+	my $ramprgm = &ByteSwapWords(substr($gstData,$gstOffsetSegaCD+0x01000,0x80000));
+	if ( $ramfiles ) {
+	    open(RAMPRGM, ">${outPrefix}ramscdprgm.bin");
+	    binmode RAMPRGM;
+	    print RAMPRGM $ramprgm;
+	    close RAMPRGM;
+	}
+	&VerboseRAM('RAMPSCDRGM ',$ramprgm,1,16,1,5);
+    }
+
+    if ( $extract & EXTRACT_SCDWORDRAM ) {
+	my $ramword = &ByteSwapWords(substr($gstData,$gstOffsetSegaCD+0x81000,0x40000));
+	if ( $ramfiles ) {
+	    open(RAMWORD, ">${outPrefix}ramscdword.bin");
+	    binmode RAMWORD;
+	    print RAMWORD $ramword;
+	    close RAMWORD;
+	}
+	&VerboseRAM('RAMSCDWORD ',$ramword,1,16,1,5);
+    }
+
+    if ( $extract & EXTRACT_SCDPCMRAM ) {
+	# TODO swap words?
+	my $rampcm = substr($gstData,$gstOffsetSegaCD+0xC1000,0x10000);
+	if ( $ramfiles ) {
+	    open(RAMPCM, ">${outPrefix}ramscdpcm.bin");
+	    binmode RAMPCM;
+	    print RAMPCM $rampcm;
+	    close RAMPCM;
+	}
+	&VerboseRAM('RAMSCDPCM ',$rampcm,1,16,1,4);
+    }
+
+    # TODO implement SCD gate array, CDC?
 
     if ( $verbose ) {
 	if ( $verbosefiles ) {

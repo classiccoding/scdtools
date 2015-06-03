@@ -29,6 +29,7 @@ my $verbosity = 2;
 my $directive = '';
 my $directiveSize = -1;
 my $directiveCount = 8;
+my $directiveLineBreak = '';
 
 my $binFileIn = '';
 my $asmFile = '';
@@ -82,6 +83,8 @@ foreach my $arg (@ARGV) {
 	$directiveSize = $1;
     } elsif ( $arg =~ m/^-directivecount=(\d+)$/i ) {
 	$directiveCount = $1;
+    } elsif ( $arg =~ m/^-(directive)?linebreak=(.+)$/i ) {
+	$directiveLineBreak = $2;
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
 	$verbosity = $1;
     } else {
@@ -196,13 +199,20 @@ if ( open(BIN, $binFile) ) {
 		# reverse the endian
 		$directiveEntryValue = scalar reverse $directiveEntryValue;
 	    }
+	    my $valuePrefix = '';
+	    my $value = '';
 	    if ( $z80 ) {
-		$asmData .= "0".uc(unpack("H*",$directiveEntryValue))."H";
+		$valuePrefix = '0';
+		$value = uc(unpack("H*",$directiveEntryValue))."H";
 	    } else {
-		$asmData .= "\$".uc(unpack("H*",$directiveEntryValue));
+		$valuePrefix = '$';
+		$value = uc(unpack("H*",$directiveEntryValue));
 	    }
+	    $asmData .= $valuePrefix.$value;
 	    $directiveIndex++;
-	    if ( $directiveIndex >= $directiveCount ) {
+	    if ( $directiveIndex >= $directiveCount ||
+		 ( $directiveLineBreak ne '' &&
+		   $value =~ /^${directiveLineBreak}$/ ) ) {
 		$asmData .= "\n";
 		$directiveIndex = 0;
 	    }
@@ -257,6 +267,8 @@ scdbin2asmdata [options] <inputfile> [outputfile]
   -directive=<dir>    specifies directive, such as dc.b, dc.w, etc
   -directivesize=<#>  number of bytes used in each directive entry
   -directivecount=<#> number of directive entries per line
+  -linebreak=<regex>  will cut the line short if value matches regex
+                      (default none) (ex: -cutshort=FFFF)
   -bin                outputs a binary file instead
   -v=<#>              specify verbosity
   -offset=<#>         byte offset in keyword file (default 0)

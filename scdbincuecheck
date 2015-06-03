@@ -1,0 +1,221 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2014 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+foreach my $cue (@ARGV) {
+    &CheckCue($cue);
+}
+
+
+
+sub CheckCue {
+    my ($cue) = @_;
+
+    if ( ! open(CUE, $cue) ) {
+	die "Could not open cue: $cue\n";
+    }
+
+    my $file = '';
+    my $fileMode = '';
+    my $track = -1;
+    my $trackMin = -1;
+    my $trackMax = -1;
+    my @trackdata;
+
+    while ( my $cueLine = <CUE> ) {
+	chomp $cueLine;
+	my $bad = 0;
+	if ( $cueLine =~ /^\s*FILE\s+\"([^\"]+)\"\s*(BINARY|WAVE)\s*$/ ) {
+	    $file = $1;
+	    $fileMode = $2;
+	} elsif ( $cueLine =~ /^\s*TRACK\s+(\d+)\s+(MODE1\/2048|MODE1\/2352|AUDIO)\s*$/ ) {
+	    my $track = $1;
+	    my $mode = $2;
+	    $trackdata[$track]{'file'} = $file;
+	    $trackdata[$track]{'filemode'} = $fileMode;
+	    $trackdata[$track]{'mode'} = $mode;
+	    if ( $trackMin < 0 || $track < $trackMin ) {
+		$trackMin = $track;
+	    }
+	    if ( $trackMax < 0 || $track > $trackMax ) {
+		$trackMax = $track;
+	    }
+	} elsif ( $cueLine =~ /^\s*INDEX\s+(\d+)\s+(\d+):(\d+):(\d+)\s*$/ ) {
+	    my $index = $1;
+	    my $mm = $2;
+	    my $ss = $3;
+	    my $ff = $3;
+	    my $sector = $ff + 75 * ( $ss + 60* $mm );
+	    if ( $index == 0 ) {
+		$trackdata[$track]{'index0sector'} = $sector;
+	    } elsif ( $index == 1 ) {
+		$trackdata[$track]{'index1sector'} = $sector;
+	    } else {
+		$bad = 1;
+	    }
+	} elsif ( $cueLine =~ /^\s*PREGAP\s/ ) {
+	    # ignore for now
+	} elsif ( $cueLine =~ /^\s*POSTGAP\s/ ) {
+	    # ignore for now
+	} elsif ( $cueLine =~ /^\s*CATALOG\s/ ) {
+	    # ignore for now
+	} elsif ( $cueLine !~ /^\s*\/\// &&
+		  $cueLine !~ /^\s*$/ ) {
+	    $bad = 1;
+	}
+	if ( $bad ) {
+	    print "Did not parse line: $cueLine\n";
+	}
+    }
+
+    use bigint;
+
+    foreach my $track ($trackMin..$trackMax) {
+	if ( exists $trackdata[$track] &&
+	     exists $trackdata[$track]{'file'} &&
+	     exists $trackdata[$track]{'filemode'} &&
+	     exists $trackdata[$track]{'mode'} ) {
+	    my $sectorSize = 2352;
+	    my $sectorStart = 0;
+	    if ( exists $trackdata[$track]{'index1sector'} ) {
+		$sectorStart = $trackdata[$track]{'index1sector'};
+	    } elsif ( exists $trackdata[$track]{'index0sector'} ) {
+		$sectorStart = $trackdata[$track]{'index0sector'};
+	    }
+	    my $sectorEnd = -1;
+	    if ( exists $trackdata[$track+1] &&
+		 exists $trackdata[$track+1]{'file'} &&
+		 $trackdata[$track]{'file'} eq $trackdata[$track+1]{'file'} ) {
+		if ( exists $trackdata[$track+1]{'index0sector'} ) {
+		    $sectorEnd = $trackdata[$track+1]{'index0sector'};
+		} elsif ( exists $trackdata[$track+1]{'index1sector'} ) {
+		    $sectorEnd = $trackdata[$track+1]{'index1sector'};
+		}
+	    }
+	    my $fileLength = -s $trackdata[$track]{'file'};
+	    my $start = $sectorSize * $sectorStart;
+	    my $end = $sectorSize * $sectorEnd;
+	    if ( $sectorEnd < 0 ) {
+		$end = $fileLength;
+	    }
+	    if ( $start >= $end ) {
+		print STDERR "start/end of track looks incorrect\n";
+	    }
+	    if ( $end > $fileLength ) {
+		print STDERR "end exceeds file length\n";
+	    }
+	    my $length = $end-$start;
+	    if ( $trackdata[$track]{'filemode'} eq 'BINARY' &&
+		 $trackdata[$track]{'mode'} eq 'AUDIO' ) {
+		#print "TRACK $track\n";
+		if ( ! open(FILE, $trackdata[$track]{'file'}) ) {
+		    print STDERR "Could not open file: $file\n";
+		} else {
+		    binmode FILE;
+		    my $trackData = '';
+		    if ( $start > 0 ) {
+			seek(FILE,$start,0);
+		    }
+		    read(FILE,$trackData,$length);
+		    close FILE;
+		    my $sumBig = 0;
+		    my $sumLittle = 0;
+		    my $samples = 0;
+		    # 16 bit signed data, alternates channels
+		    # do one sector out of every 10 seconds (1 out of every 750 sectors)
+		    for ( my $sector = 0; $sector < $length-$sectorSize; $sector += 10*75*$sectorSize ) {
+			for ( my $channel = 0; $channel < 2; $channel += 2 ) {
+			    my $lastBig    = 0;
+			    my $lastLittle = 0;
+			    for ( my $i = $channel; $i < 2352; $i += 4 ) {
+				my $this0 = ord(substr($trackData,$i+$channel+$sector,1));
+				my $this1 = ord(substr($trackData,$i+$channel+$sector+1,1));
+				
+				my $thisBig    = $this0*256+$this1;
+				if ( $thisBig & 0x8000 ) {
+				    $thisBig = ( ~ ( $thisBig & 0x7FFF ) + 1 );
+				}
+
+				my $thisLittle = $this1*256+$this0;
+				if ( $thisLittle & 0x8000 ) {
+				    $thisLittle = ( ~ ( $thisLittle & 0x7FFF ) + 1 );
+				}
+
+				#printf("%2.2X %2.2X %8.8X %8.8X\n",$this0,$this1,$thisBig,$thisLittle);
+				if ( $i >= 4 ) {
+				    my $diffBig = $thisBig-$lastBig;
+				    if ( $diffBig < 0 ) {
+					$diffBig = 0 - $diffBig;
+				    }
+				    
+				    my $diffLittle = $thisLittle-$lastLittle;
+				    if ( $diffLittle < 0 ) {
+					$diffLittle = 0 - $diffLittle;
+				    }
+
+				    #printf("      %8.8X %8.8X\n",$diffBig,$diffLittle);
+				    $sumBig    += $diffBig;
+				    $sumLittle += $diffLittle;
+				    $samples++;
+				}
+
+				$lastBig    = $thisBig;
+				$lastLittle = $thisLittle;
+			    }
+			}
+		    }
+		    my $avgBig = $sumBig / $samples;
+		    my $avgLittle = $sumLittle / $samples;
+		    if ( 0 ) {
+			print "Track $track samples $samples\n";
+			print "Track $track sumBig $sumBig\n";
+			print "Track $track sumLittle $sumLittle\n";
+			print "Track $track avgBig $avgBig\n";
+			print "Track $track avgLittle $avgLittle\n";
+		    }
+		    if ( $avgBig > 0x2000 && $avgBig > 4 * $avgLittle ) {
+			print "Track $track audio appears to be little endian (cdrdao should use --swap)\n";
+		    } elsif ( $avgLittle > 0x2000 && $avgLittle > 4 * $avgBig ) {
+			print "Track $track audio appears to be big endian (cdrdao should not use --swap)\n";
+		    } else {
+			print "Track $track audio does not clearly indicate audio endianess (big average $avgBig vs little average $avgLittle)\n";
+		    }
+		}
+	    }
+	}
+    }
+}
+
+
+sub Help {
+    die '
+scdbincuecheck [cuefiles]
+
+[description]
+  Checks a cue file for stuff.
+  Currently only attempts to determine endianess of raw audio data.
+
+';
+}

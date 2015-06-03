@@ -1,0 +1,156 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2015 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+use strict;
+use warnings;
+
+if ( $#ARGV < 0 || $#ARGV > 1 ) {
+    &Help();
+}
+
+my $romFile0 = $ARGV[0];
+my $romFile1 = $#ARGV < 1 ? $romFile0 : $ARGV[1];
+
+my $verbosity = 2;
+
+my $romFile0Length = -s $romFile0;
+my $romFile0Data = '';
+
+open( ROM, $romFile0 ) or die "Could not read file: $romFile0\n";
+binmode ROM;
+read( ROM, $romFile0Data, $romFile0Length );
+close ROM;
+
+my $romFile1Length = $romFile0Length;
+my $romFile1Data = $romFile0Data;
+
+my $patchAsmFooter = $romFile0Length-16;
+
+if ( $romFile1Length < 16 ||
+     substr($romFile1Data,$patchAsmFooter,8) ne 'PATCHASM' ) {
+    print STDERR "No PATCHASM detected\n";
+    exit;
+}
+
+# loop in case more than 1 PATCHASM set of patches is in file
+while ( $patchAsmFooter != 0 ) {
+    if ( $patchAsmFooter + 16 > $romFile1Length ) {
+	die "Bad linked PATCHASM\n";
+    }
+
+    if ( substr($romFile1Data,$patchAsmFooter,8) ne 'PATCHASM' ) {
+	die "Bad linked PATCHASM\n";
+    }
+
+    my $patchAsmInitialize = unpack("N",substr($romFile1Data,$patchAsmFooter+8,4));
+    if ( $patchAsmInitialize > $patchAsmFooter ) {
+	die "Invalid PATCHASM initialize address\n";
+    }
+
+    my $patchAsmLink = unpack("N",substr($romFile1Data,$patchAsmFooter+12,4));
+
+    my $patchAsmAddress = $patchAsmInitialize;
+
+    while ($patchAsmAddress != $patchAsmFooter) {
+	if ( substr($romFile1Data,$patchAsmAddress,8) eq 'PATCHASM' ) {
+	    # PATCHASM footer found, skip over
+	    $patchAsmAddress += 16;
+	} else {
+	    my $patchAsmAddressNext = unpack("N",substr($romFile1Data,$patchAsmAddress,4));
+	    my $patchAsmTargetLength = ( $patchAsmAddressNext - $patchAsmAddress - 8 );
+	    if ( $patchAsmTargetLength < 0 ) {
+		die "Invalid PATCHASM next address\n";
+	    }
+	    my $patchAsmTargetAddress = unpack("N",substr($romFile1Data,$patchAsmAddress+4,4));
+	    if ( $patchAsmTargetAddress + $patchAsmTargetLength > $patchAsmInitialize ) {
+		die "Invalid PATCHASM target address\n";
+	    }
+	    my $patchAsmTargetData = substr($romFile1Data,$patchAsmAddress+8,$patchAsmTargetLength);
+	    substr($romFile1Data,$patchAsmTargetAddress,$patchAsmTargetLength) = $patchAsmTargetData;
+	    $patchAsmAddress = $patchAsmAddressNext;
+	}
+    }
+
+    if ( $patchAsmFooter + 16 == $romFile1Length ) {
+	$romFile1Length = $patchAsmInitialize;
+	$romFile1Data = substr($romFile1Data,0,$romFile1Length);
+    }
+
+    $patchAsmFooter = $patchAsmLink;
+}
+
+open( ROM, '>'.$romFile1 ) or die "Could not read file: $romFile1\n";
+binmode ROM;
+print ROM $romFile1Data;
+close ROM;
+
+print STDERR "PATCHASM applied\n";
+
+
+sub Help {
+    die '
+scdpatchasm <binfile> [binfileout]
+
+[description]
+  Patch updates binary file using PATCHASM format. If binfileout is not
+  specified updates binfile.
+
+[PATCHASM format]
+  The patch data is located after the binary data of the source (typically).
+  It consists of patch entries with a final patch footer.  Patch footers
+  in between patch entries will be skipped in case of multiple patches.
+
+  [patch entry]
+    dc.l <next patch entry address>
+    dc.l <patch target address>
+    <target patch data between here and next patch entry address>
+
+  [patch footer]
+    dc.b \'PATCHASM\'
+    dc.l <first patch entry>
+    dc.l <linking patch footer earlier in data, 0 if no linking patch>
+    <EOF>
+
+  All patch data at the end of the file will be removed.  If a linking patch
+  entry is in the middle of the data it will not be removed.
+
+  This format was intended to allow hacking a ROM disassembly without
+  modifying the disassembly, but allowing usage of the ROM disassembly labels
+  and to use assembly to make the patch data (one known limit is that relative
+  references require special rorg type code if truly needed).
+
+[PATCHASM example]
+	include rom.asm
+PatchAsmInitialize:	
+PatchAsm0000:	
+	dc.l	PatchAsm0001
+	dc.l	Title_Local
+	dc.b	\'MY TOTALLY AWESOME ROM HACK                     \'
+PatchAsm0001:	
+	dc.l	PatchAsm0002
+	dc.l	Title_Int
+	dc.b	\'MY TOTALLY AWESOME ROM HACK                     \'
+PatchAsm0002:
+PatchAsmFooter:
+	dc.b	\'PATCHASM\'
+	dc.l	PatchAsmInitialize
+	dc.l	0
+
+';
+}

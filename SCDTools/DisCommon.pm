@@ -451,10 +451,9 @@ sub SetLabel {
 sub LabelGeneric {
     my ($problem,$addr) = @_;
     my $label;
+    $label = &GetLabel($addr);
     my $dataUsage = &GetData($addr);
-    # TODO when doing small section of code how to handle out of scope labels
     if ( ( $dataUsage & DATA_INVALID_MASK ) == 0 ) {
-	$label = &GetLabel($addr);
 	if ( $label eq '' ) {
 	    # TODO make labels when?
 	    if ( 1 || $codePointNice ) {
@@ -467,7 +466,7 @@ sub LabelGeneric {
 		$label = '?';
 	    }
 	}
-    } else {
+    } elsif ( $label eq '' ) {
 	$problem = DIS_PRBM_TODO_BAD;
 	$label = '?';
 	# $label = sprintf($labelGenericFormat,$addr);
