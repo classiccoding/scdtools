@@ -76,10 +76,6 @@ if ( $checksumSaved != $checksumCurrent ) {
 }
 
 
-my $endOfRomPointer = 0x1A4;
-my $checksumPointer = 0x18E;
-my $startOfChecksum = 0x200;
-
 sub Help {
     die '
 scdromchecksumupdate [romfile] [romfilesave]
