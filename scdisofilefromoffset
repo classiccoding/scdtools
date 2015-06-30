@@ -28,6 +28,9 @@ if ( $#ARGV != 1 ) {
 
 my $iso = $ARGV[0];
 my $isoIndex = $ARGV[1];
+if ( $isoIndex =~ /^0x(.+)$/ ) {
+    $isoIndex = hex($1);
+}
 
 my @found;
 

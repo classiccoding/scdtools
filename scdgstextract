@@ -931,6 +931,8 @@ foreach my $gstFile (@gstFiles) {
 	    $cmd .= " $convertSpriteHigh";
 	    $cmd .= " ${outPrefix}composite.gif";
 	    system($cmd);
+	    $cmd = "convert ${outPrefix}composite.gif -flatten ${outPrefix}composite.png";
+	    system($cmd);
 	}
     }
 

@@ -175,6 +175,10 @@ if ( $length <= 0 ) {
     $length = $binSize - $offset;
 }
 
+# TODO hard code usage into option
+# 0x200;
+my $alignComment = 0;
+
 my $asmData = '';
 if ( open(BIN, $binFile) ) {
     binmode BIN;
@@ -188,6 +192,10 @@ if ( open(BIN, $binFile) ) {
 	my $directiveIndex = 0;
 	my $directiveEntryValue = '';
 	for ( my $binIndex = 0; $binIndex < $length; $binIndex += $directiveSize ) {
+	    if ( $alignComment && ( $binIndex + $offset ) % $alignComment == 0 ) {
+		# TODO z80 support?
+		$asmData .= sprintf("\t;; \$%8.8X\n",$binIndex+$offset);
+	    }
 	    # TODO ignore error for now
 	    read(BIN,$directiveEntryValue,$directiveSize);
 	    if ( $directiveIndex <= 0 ) {

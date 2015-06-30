@@ -196,9 +196,9 @@ sub CheckCue {
 			print "Track $track avgLittle $avgLittle\n";
 		    }
 		    if ( $avgBig > 0x2000 && $avgBig > 4 * $avgLittle ) {
-			print "Track $track audio appears to be little endian (cdrdao should use --swap)\n";
+			print "Track $track audio appears to be little endian (suggest cdrdao --swap and scdwrite -swap)\n";
 		    } elsif ( $avgLittle > 0x2000 && $avgLittle > 4 * $avgBig ) {
-			print "Track $track audio appears to be big endian (cdrdao should not use --swap)\n";
+			print "Track $track audio appears to be big endian (cdrdao with no --swap and scdwrite with no -swap)\n";
 		    } else {
 			print "Track $track audio does not clearly indicate audio endianess (big average $avgBig vs little average $avgLittle)\n";
 		    }

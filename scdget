@@ -20,6 +20,7 @@
 #   * only supports 1 track sega cds for now, haven't tried more complex ones
 ###############################################################################
 
+# use mount to determine (most likely /dev/sr0 or old machine /dev/hdc)
 dd if=/dev/cdrom of=cdrom.iso
 
 #cdrdao read-cd --read-raw --datafile cdrom.bin --device ATAPI:0,0,0 --driver generic-mmc-raw cdrom.cue

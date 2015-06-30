@@ -40,10 +40,12 @@ foreach my $arg (@ARGV) {
 	$z80 = 1;
     } elsif ( $arg =~ m/^-vasm$/i ) {
 	$asm = 'vasm';
-    } elsif ( $arg =~ m/^-vasmunopt$/i ) {
-	$asm = 'vasmunopt';
+    } elsif ( $arg =~ m/^-vasm_?unopt$/i ) {
+	$asm = 'vasm_unopt';
     } elsif ( $arg =~ m/^-asm68k_?wine$/i ) {
 	$asm = 'asm68k_wine';
+    } elsif ( $arg =~ m/^-asm68k_?wine_?opt$/i ) {
+	$asm = 'asm68k_wine_opt';
     } elsif ( $arg =~ m/^-asmx$/i ) {
 	$asm = 'asmx';
     } elsif ( $arg =~ m/^-v=(\d+)$/i ) {
@@ -90,7 +92,7 @@ if ( $asm eq 'asmx' ) {
 	$cmd68k = "vasmm68k_mot -quiet -Fbin -m68000 $options -o $bin $asm -L $lst";
 	$cmdz80 = "vasmz80_oldstyle -quiet -Fbin $options -o $bin $asm -L $lst";
     }
-} elsif ( $asm eq 'vasmunopt' ) {
+} elsif ( $asm eq 'vasm_unopt' ) {
     if ( $#args == 1 ) {
 	my $asm = $args[0];
 	my $bin = $args[1];
@@ -113,6 +115,18 @@ if ( $asm eq 'asmx' ) {
 	my $bin = $args[1];
 	my $lst = $args[2];
 	$cmd68k = "wine `which asm68k.exe` /q /k /p /o w+ $asm, $bin, asm68k.sym, $lst";
+    }
+    $cmdz80 = "";
+} elsif ( $asm eq 'asm68k_wine_opt' ) {
+    if ( $#args == 1 ) {
+	my $asm = $args[0];
+	my $bin = $args[1];
+	$cmd68k = "wine `which asm68k.exe` /q /k /p /o w+ /o op+ /o os+ /o ow+ /o oz+ $asm, $bin";
+    } elsif ( $#args == 2 ) {
+	my $asm = $args[0];
+	my $bin = $args[1];
+	my $lst = $args[2];
+	$cmd68k = "wine `which asm68k.exe` /q /k /p /o w+ /o op+ /o os+ /o ow+ /o oz+ $asm, $bin, asm68k.sym, $lst";
     }
     $cmdz80 = "";
 }

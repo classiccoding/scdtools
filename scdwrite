@@ -27,11 +27,16 @@ use strict;
 use warnings;
 
 my $swap = 0;
+my $prefix = '';
 
-if ( $#ARGV == 0 && $ARGV[0] =~ /^-swap$/i ) {
-    $swap = 1;
-} elsif ( $#ARGV >= 0 ) {
-    &Help();
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-swap$/i ) {
+	$swap = 1;
+    } elsif ( $arg =~ /^-prefix=(.*)$/i ) {
+	$prefix = $1;
+    } else {
+	&Help();
+    }
 }
 
 ###############################################################################
@@ -67,8 +72,8 @@ my @filesToDelete;
 
 # check for bin/cue format
 
-my @bins = (<*.bin>,<*.BIN>);
-my @cues = (<*.cue>,<*.CUE>);
+my @bins = (<${prefix}*.bin>,<${prefix}*.BIN>);
+my @cues = (<${prefix}*.cue>,<${prefix}*.CUE>);
 
 # determine format (bin/cue or iso/mp3 or iso/wav)
 
@@ -84,7 +89,7 @@ if ( $#bins == 0 && $#cues == 0 ) {
 
     # get iso name
 
-    my @isos = (<*.iso>,<*.ISO>);
+    my @isos = (<${prefix}*.iso>,<${prefix}*.ISO>);
 
     if ( $#isos != 0 ) {
 	die "Only support one iso in PWD";
@@ -95,7 +100,7 @@ if ( $#bins == 0 && $#cues == 0 ) {
     # convert mp3 files to wav files
 
     if ( $useWav ) {
-	foreach my $mp3 ((<*.mp3>,<*.MP3>)) {
+	foreach my $mp3 ((<${prefix}*.mp3>,<${prefix}*.MP3>)) {
 	    my $out = $mp3;
 	    $out =~ s/\.mp3$/.wav/;
 	    if ( ! -e $out ) {
@@ -114,10 +119,10 @@ if ( $#bins == 0 && $#cues == 0 ) {
     my $audioType;
 
     if ( $useWav ) {
-	@audios = sort (<*.wav>,<*.WAV>);
+	@audios = sort (<${prefix}*.wav>,<${prefix}*.WAV>);
 	$audioType = 'WAVE';
     } else {
-	@audios = sort (<*.mp3>,<*.MP3>);
+	@audios = sort (<${prefix}*.mp3>,<${prefix}*.MP3>);
 	$audioType = 'MP3';
     }
 

@@ -77,6 +77,9 @@ my $padSize = 63;                    # not in config by default
 # 1 for BIN/CUE (TODO this is a work in progress since it puts in zero for the parity fields)
 my $isoType = 0;                     # not in config by default
 
+# if 0, will make CUE for ISO files
+my $audioTracks = 0;                 # not in config by default
+
 # Level 1: File names are limited to eight characters with a three-character extension, using upper case letters, numbers and underscore only. The maximum depth of directories is eight.
 # Level 2: File names are not limited to 11 characters (the 8.3 format) but can be up to the maximum allowed by the 1 byte counter in the directory entry and the filename length byte counter. Typically, this is close to 180 characters, depending on how many extended attributes are present.
 # Level 3: Files are allowed to be non-contiguous (i.e., fragmented), principally to allow packet writing or incremental CD recording).
@@ -255,7 +258,7 @@ if ( -e $cfg ) {
 	my $cfgBuffer = '';
 	if ( read(CFG,$cfgBuffer,-s $cfg) ) {
 	    eval($cfgBuffer);
-	    warn $@ if $@;
+	    print $@ if $@;
 	}
     }
     close CFG;
@@ -789,11 +792,18 @@ sub MakeISO {
 	die "Too many sectors, fix sectorCount handling\n";
     }
 
-    if ( $isoType == 1 ) {
+    my $guideText = '';
+    if ( $isoType == 0 && $audioTracks == 0 ) {
+	$guideText .= "FILE \"$iso\" BINARY\n";
+	$guideText .= "  TRACK 01 MODE1/2048\n";
+	$guideText .= "    INDEX 01 00:00:00\n";
+    } elsif ( $isoType == 1 ) {
 	my $guideText = '';
 	$guideText .= "FILE \"$iso\" BINARY\n";
 	$guideText .= "  TRACK 01 MODE1/2352\n";
 	$guideText .= "    INDEX 01 00:00:00\n";
+    }
+    if ( $guideText ne '' ) {
 	my $guide = $iso;
 	$guide =~ s/\.(ISO|BIN)$/.CUE/;
 	if ( open( GUIDE, ">$guide" ) ) {
@@ -2147,7 +2157,7 @@ sub MakeFPSInc {
 sub CheckForRebuildAll {
     if ( lc($scdcountry) eq 'all' ) {
 	$scdcountryAllRequiresFullRebuild = 1;
-	die "Need to rebuild all\n";
+	die "Needs rebuild for each country\n";
     }
 }
 

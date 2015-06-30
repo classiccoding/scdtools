@@ -1,4 +1,21 @@
 #!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2014 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
 
 use strict;
 use warnings;
@@ -6,10 +23,24 @@ use warnings;
 my $blockSize = 0x40;
 my $bramSize = 0x2000;
 
-foreach my $fileIn (@ARGV) {
+if ( $#ARGV < 0 ) {
+    &Help();
+}
 
+my $prefix = '';
+
+my $tableLine = "+----------+-------------+----+-------+------+\n";
+my $tableHead = "| DRIVE    | FILENAME    | DP | INDEX | SIZE |\n";
+my $tableStarted = 0;
+
+foreach my $fileIn (@ARGV) {
     my $fileInData = '';
     my $fileInLength = -s $fileIn;
+
+    $prefix = $fileIn;
+    $prefix =~ s/\.[^\.]+$//;
+    $prefix =~ s/^[^[\\\/]*[\\\/]//g;
+    $prefix .= '_';
 
     my $fileOut = 'out.bin';
     my $fileOutData = '';
@@ -19,9 +50,43 @@ foreach my $fileIn (@ARGV) {
     read(FILEIN,$fileInData,$fileInLength);
     close FILEIN;
 
-    my $bramData = substr($fileInData,0,$bramSize);
+    my $out = '';
+    my $internal = '';
+    my $cart = '';
+    if ( $fileIn =~ /\.crm/i ) {
+	# RAM cartridge
+	$cart = &BRAMDecodeDirectory('CART    ',$fileInData);
+    } else {
+	# internal RAM
+	if ( $fileInLength >= $bramSize ) {
+	    my $bramData = substr($fileInData,0,$bramSize);
+	    $internal = &BRAMDecodeDirectory('INTERNAL',$bramData);
+	}
 
-    &BRAMDecodeDirectory($bramData);
+	# optional RAM cartridge
+	if ( $fileInLength > $bramSize ) {
+	    my $cartData = substr($fileInData,$bramSize,$fileInLength-$bramSize);
+
+	    $cart = &BRAMDecodeDirectory('CART    ',$cartData);
+	}
+    }
+
+    if ( $internal ne '' ) {
+	if ( ! $tableStarted ) {
+	    $out .= $tableLine.$tableHead.$tableLine;
+	    $tableStarted = 1;
+	}
+	$out .= $internal.$tableLine;
+    }
+    if ( $cart ne '' ) {
+	if ( ! $tableStarted ) {
+	    $out .= $tableLine.$tableHead.$tableLine;
+	    $tableStarted = 1;
+	}
+	$out .= $cart.$tableLine;
+    }
+
+    print $out;
 
     for ( my $index = 0; $index + $blockSize <= $fileInLength; $index += $blockSize ) {
 	my $block = substr($fileInData,$index,$blockSize);
@@ -37,33 +102,45 @@ foreach my $fileIn (@ARGV) {
 
 
 sub BRAMDecodeDirectory {
-    my ($bramData) = @_;
+    my ($drive,$bramData) = @_;
     # TODO format check?
     my $bramDataLength = length($bramData);
     if ( $bramDataLength & 0x3F ) {
-	die "Bad bram\n";
+	print STDERR "Bad bram size\n";
+	return '';
     }
     my $lastBlockIndex = $bramDataLength - $blockSize;
+    if ( substr($bramData,$lastBlockIndex) =~ /^[\x00]+$/ ) {
+	return sprintf("| %s | %s |    |       |      |%s\n",$drive,'           ',' (unformatted drive)');
+    }
     my $blocksFree = unpack("n",substr($bramData,$lastBlockIndex+0x10,2));
     if ( $blocksFree != unpack("n",substr($bramData,$lastBlockIndex+0x12,2)) ||
 	 $blocksFree != unpack("n",substr($bramData,$lastBlockIndex+0x14,2)) ||
 	 $blocksFree != unpack("n",substr($bramData,$lastBlockIndex+0x16,2)) ) {
 	print STDERR "Inconsistent blocks free value\n";
-	return;
+	return '';
     }
     my $filesUsed = unpack("n",substr($bramData,$lastBlockIndex+0x18,2));
     if ( $filesUsed != unpack("n",substr($bramData,$lastBlockIndex+0x1A,2)) ||
 	 $filesUsed != unpack("n",substr($bramData,$lastBlockIndex+0x1C,2)) ||
 	 $filesUsed != unpack("n",substr($bramData,$lastBlockIndex+0x1E,2)) ) {
 	print STDERR "Inconsistent files used value\n";
-	return;
+	return '';
+    }
+    if ( $blocksFree == 0 && $filesUsed == 0 ) {
+	print STDERR "Zero files used and zero blocks free makes no sense\n";
+	return '';
     }
     my $directoryIndex = $lastBlockIndex - $filesUsed * 0x20;
-    if ( $filesUsed > 0 ) {
-	print "+-------------+----+-------+------+\n";
-	print "| FILENAME    | DP | INDEX | SIZE |\n";
-	print "+-------------+----+-------+------+\n";
-	for ( my $i = $directoryIndex; $i < $lastBlockIndex; $i += 0x20 ) {
+    if ( $directoryIndex < 0x40 + $filesUsed * 0x40 ) {
+	print STDERR "Directory table too big";
+	return '';
+    }
+    my $table = '';
+    if ( $filesUsed == 0 ) {
+	$table .= sprintf("| %s | %s |    |       |      |%s\n",$drive,'           ',' (empty drive)');
+    } else {
+	for ( my $i = $lastBlockIndex-0x20; $i >= $directoryIndex; $i -= 0x20 ) {
 	    my $block = substr($bramData,$i & 0xFFFFC0,$blockSize);
 	    my $decoded = &BRAMDecodeDataProtectedBlock($block);
 	    my $entry = substr($decoded,($i & 0x3F) >> 1,0x10);
@@ -71,24 +148,34 @@ sub BRAMDecodeDirectory {
 	    my $fileDatProt = ord(substr($entry,11,1));
 	    my $fileBlockStart = unpack("n",substr($entry,12,2));
 	    my $fileBlockSize = unpack("n",substr($entry,14,2));
-	    printf("| %s | %2.2X |  %4.4X | %4.4X |\n",$fileName,$fileDatProt,$fileBlockStart,$fileBlockSize);
 	    
 	    my $fileData = '';
-	    for ( my $j = 0; $j < $fileBlockSize; $j++ ) {
-		my $block = substr($bramData,($j+$fileBlockStart) * $blockSize,$blockSize);
-		if ( $fileDatProt ) {
-		    $block = &BRAMDecodeDataProtectedBlock($block);
+	    my $extra = '';
+	    if ( ( $fileBlockStart + $fileBlockSize ) * $blockSize <= $directoryIndex ) {
+		for ( my $j = 0; $j < $fileBlockSize; $j++ ) {
+		    my $block = substr($bramData,($j+$fileBlockStart) * $blockSize,$blockSize);
+		    if ( $fileDatProt ) {
+			$block = &BRAMDecodeDataProtectedBlock($block);
+		    }
+		    $fileData .= $block;
 		}
-		$fileData .= $block;
+		if ( open(SAV, '>'.$prefix.$fileName.'.SAV') ) {
+		    binmode SAV;
+		    print SAV $fileData;
+		}
+		close SAV;
+
+		if ( $fileData !~ /[^\x00]/ ) {
+		    $extra = ' (data is all zeros)';
+		}
+	    } else {
+		$extra = ' (invalid start/offset)';
 	    }
-	    if ( open(SAV, '>'.$fileName.'.SAV') ) {
-		binmode SAV;
-		print SAV $fileData;
-	    }
-	    close SAV;
+	    $table .= sprintf("| %s | %s | %2.2X |  %4.4X | %4.4X |%s\n",$drive,$fileName,$fileDatProt,$fileBlockStart,$fileBlockSize,$extra);
+
 	}
-	print "+-------------+----+-------+------+\n";
     }
+    return $table;
 }
 
 
@@ -120,4 +207,19 @@ sub BRAMDecodeDataProtectedBlock {
     }
     
     return $dataOut;
+}
+
+
+sub Help {
+    die '
+scdbrm <brmfiles>
+
+[description]
+  Decodes directory to screen and outputs each file (decodes data protected).
+  Also generates out.bin which is every block decoded as if it was data
+  protected.  Treats *.crm and *.CRM files as RAM catridge only data.
+  All other files are treated as Gens style brm files (first 8k represents
+  internal RAM and any data after that is the optional RAM cartridge data).
+
+';
 }

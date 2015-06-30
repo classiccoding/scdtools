@@ -60,9 +60,11 @@ my $wine = &Which('wine');
 my $dosbox = &Which('dosbox');
 
 #my $asm68kopts = '/o op+ /o os+ /o ow+ /o oz+ /o oaq+ /o osq+ /o omq+';
-my $asm68kopts = '/o ow+ ';
+my $asm68kopts = '/o op+ /o os+ /o ow+ /o oz+ ';
 #my $snasm68kopts = '-o op+ -o os+ -o ow+ -o oz+ -o oaq+ -o osq+ -o omq+';
-my $snasm68kopts = '-o ow+';
+my $snasm68kopts = '-o op+ -o os+ -o ow+ -o oz+';
+
+my $vasmopts68k = '';
 
 #op- 	Enable PC relative optimizations. Switch to PC relative addressing when absolute long addressing is used and the code allows such a switch.
 #os- 	Enable short branch optimizations. Backwards relative branches will use the short form if possible.
@@ -97,6 +99,7 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg eq '-unopt' ) {
 	$asm68kopts = '';
 	$snasm68kopts = '';
+	$vasmopts68k = '-no-opt'
     } elsif ( -e $arg ) {
 	push @files, $arg;
     } else {
@@ -149,7 +152,7 @@ even	macro
 
 if ( ! $z80 && $vasmm68k_mot ne '' ) {
     &Running('vasmm68k_mot');
-    system("vasmm68k_mot $asm -Fbin -m68000 -no-opt -o vasmm68k.bin");
+    system("vasmm68k_mot $asm -Fbin -m68000 $vasmopts68k -o vasmm68k.bin");
 }
 
 if ( $z80 && $vasmz80_oldstyle ne '' ) {
