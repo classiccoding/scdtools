@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2011 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+use strict;
+use warnings;
+
+use FindBin;
+use lib $FindBin::Bin;
+use SCDTools::Palette;
+
+my $palette = SCDTools::Palette->new();
+my $palette2 = SCDTools::Palette->new();
+
+foreach my $arg (@ARGV) {
+    if ( $palette->ParseArg($arg) ) {
+	# do nothing
+    } elsif ( -e $arg ) {
+	$palette2->{'fileInput'} = $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+$palette->ReadPalette();
+$palette2->ReadPalette();
+
+my @indexesUnused;
+
+for ( my $index = 0; $index < $palette->GetColorsCountRead(); $index++ ) {
+    my $color = $palette->GetColor($index);
+    if ( $palette2->GetColorIndexWithNoAdding($color) < 0 ) {
+	unshift @indexesUnused, $index;
+    }
+}
+
+for ( my $index2 = 0; $index2 < $palette2->GetColorsCountRead(); $index2++ ) {
+    my $color = $palette2->GetColor($index2);
+    if ( $palette->GetColorIndexWithNoAdding($color) < 0 ) {
+	if ( $#indexesUnused >= 0 ) {
+	    my $index = shift @indexesUnused;
+	    $palette->SetColor($index,$color);
+	} else {
+	    $palette->AddColor($color);
+	}
+    }
+}
+
+$palette->OutputPalette();

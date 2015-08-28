@@ -41,7 +41,9 @@ my @imgFiles;
 
 my $resizeWidth = 0;
 my $resizeHeight = 0;
+my $resizeKeepAspect = 0;
 my $resizeToTiles = 0;
+my $trim = 0;
 my $ditherOrdered = '';
 my $ditherVdp = 'fs';
 my $ditherQuantize = 'fs';
@@ -51,12 +53,16 @@ my $ditherFinal = 'fs';
 my $treedepth = 4;
 my $debug = 0;
 
+my $colorCountMax = 0;
+
 foreach my $arg (@ARGV) {
     if ( $palette->ParseArg($arg) ) {
 	# do nothing
     } elsif ( $arg =~ /^-resize=(\d+)x(\d+)$/i ) {
 	$resizeWidth = $1;
 	$resizeHeight = $2;
+    } elsif ( $arg =~ /^-resizeKeepAspect$/i ) {
+	$resizeKeepAspect = 1;
     } elsif ( $arg =~ /^-resizetotiles?$/i ) {
 	$resizeToTiles = 1;
     } elsif ( $arg =~ /^-resizetoeventiles?$/i ) {
@@ -76,6 +82,10 @@ foreach my $arg (@ARGV) {
 	$ditherQuantize = lc($1);
     } elsif ( $arg =~ /^-ditherfinal=(none|r|fs)$/i ) {
 	$ditherFinal = lc($1);
+    } elsif ( $arg =~ /^-maxcolors=(\d+)$/i ) {
+	$colorCountMax = $1;
+    } elsif ( $arg =~ /^-trim$/i ) {
+	$trim = 1;
     } elsif ( $arg =~ /^-debug$/i ) {
 	$debug = 1;
     } elsif ( -e $arg ) {
@@ -89,7 +99,9 @@ foreach my $arg (@ARGV) {
 $palette->ReadPalette();
 $palette->SetPaletteCount(512/15);
 
-my $colorCountMax = $palette->GetColorsPerPalette();
+if ( $colorCountMax <= 0 ) {
+    $colorCountMax = $palette->GetColorsPerPalette();
+}
 
 foreach my $imgFile (@imgFiles) {
     &ImgExtractColors($imgFile);
@@ -107,9 +119,30 @@ sub ImgExtractColors($) {
     my $x = $imgOriginal->ReadImage($imgFile);
     warn $x if $x;
 
+    if ( $trim ) {
+	$imgOriginal->Trim();
+    }
+
     if ( $resizeWidth && $resizeHeight ) {
+	my $width = $imgOriginal->Get('width');
+	my $height = $imgOriginal->Get('height');
+	my $widthNew = $resizeWidth;
+	my $heightNew = $resizeHeight;
+	if ( $resizeKeepAspect ) {
+	    if      ( $width * $resizeHeight > $height * $resizeWidth ) {
+		$heightNew = int( ( $height * $resizeWidth / $width ) + .5 );
+	    } elsif ( $width * $resizeHeight < $height * $resizeWidth ) {
+		$widthNew = int( ( $width * $resizeHeight / $height ) + .5 );
+	    }
+	}
 	# possible filters: Point, Box, Triangle, Hermite, Hanning, Hamming, Blackman, Gaussian, Quadratic, Cubic, Catrom, Mitchell, Lanczos, Bessel, Sinc
-	$imgOriginal->Resize('width'=>$resizeWidth,'height'=>$resizeHeight,'filter'=>'Cubic');
+	$imgOriginal->Resize('width'=>$widthNew,'height'=>$heightNew,'filter'=>'Cubic');
+	if ( $resizeWidth != $widthNew || $resizeHeight != $heightNew ) {
+	    my $x = (($resizeWidth-$widthNew)>>1);
+	    my $y = (($resizeHeight-$heightNew)>>1);
+	    $imgOriginal->Extent('width'=>$resizeWidth,'height'=>$resizeHeight,'background'=>'rgb(0,0,0)');
+	    $imgOriginal->Roll('x'=>$x,'y'=>$y);
+	}
     }
 
     if ( $resizeToTiles ) {
@@ -124,10 +157,11 @@ sub ImgExtractColors($) {
 	    # offsets don't work with newer versions of image magick for extent
 	    #$imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'x'=>$x,'y'=>$y,'background'=>'rgb(0,0,0)');
 	    #$imgOriginal->Extent('geometry'=>"${widthNew}x${heightNew}+${x}+${y}",'background'=>'rgb(0,0,0)');
-
-	    # so instead we can extent and roll
-	    $imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'background'=>'rgb(0,0,0)');
-	    $imgOriginal->Roll('x'=>$x,'y'=>$y);
+	    if ( $widthNew != $width || $heightNew != $height ) {
+		# so instead we can extent and roll
+		$imgOriginal->Extent('width'=>$widthNew,'height'=>$heightNew,'background'=>'rgb(0,0,0)');
+		$imgOriginal->Roll('x'=>$x,'y'=>$y);
+	    }
 	}
     }
 
@@ -276,7 +310,10 @@ scdimgvdppalette [options] <imgfiles>
   Still a work in progress.
 
 '.$palette->GetHelpString().'[options]
+  -maxcolors=<#>             specify max colors (default 15)
+  -trim                      trims outside of image
   -resize=<x>x<y>            resize to a specific size
+  -resizekeepaspect          keep aspect for -resize=
   -resizetotiles             resize the image to a tile boundary
                              (centered and uses black for pixel fill)
   -resizetoeventiles         resize the image to an even tile boundary

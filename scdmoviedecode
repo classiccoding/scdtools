@@ -28,6 +28,7 @@ if ( $#ARGV < 0 ) {
 
 my $isTomcatAlley = 0;
 my $isCodeMonkeys = 0;
+my $isEcco32x = 0;
 
 my $extractImageData = 0;
 my $extractImagePNGs = 0;
@@ -44,6 +45,9 @@ my $ffmpeg = 0;
 my $reencode = 0;
 
 my $scdcinepakencodeframeCompare = 0;
+
+my $pcmFD = -1;
+my $sampleRate = -1;
 
 my $extractPCM = 0;
 my $extractWav = 0;
@@ -80,10 +84,21 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-codemonkeys$/i ) {
 	$movieFormat = 'cinepak';
 	$isCodeMonkeys = 1;
+    } elsif ( $arg =~ /^-ecco32x$/i ) {
+	$movieFormat = 'cinepak';
+	$isEcco32x = 1;
     } elsif ( $arg =~ /^-stm$/i ) {
 	$movieFormat = 'stm';
     } elsif ( $arg =~ /^-sga$/i ) {
 	$movieFormat = 'sga';
+    } elsif ( $arg =~ /^-pcmraw$/i ) {
+	$movieFormat = 'pcmraw';
+    } elsif ( $arg =~ /^-pcmfd=(\d+)$/i ) {
+	$pcmFD = $1;
+    } elsif ( $arg =~ /^-pcmfd=0x([0-9A-F]+)$/i ) {
+	$pcmFD = hex($1);
+    } elsif ( $arg =~ /^-samplerate=(\d+)$/i ) {
+	$sampleRate = $1;
     } elsif ( $arg =~ /^-pngcrush$/i ) {
 	$pngcrush = 1;
 	$extractImageData = 1;
@@ -135,8 +150,8 @@ my $isoDate = '';
 
 # decode movies
 foreach my $movieFile (@movieFiles) {
+    my $movieFileSize = -s $movieFile;
     if ( $seekCinepak ) {
-	my $movieFileSize = -s $movieFile;
 	if ( open( MOVIE, $movieFile ) ) {
 	    binmode MOVIE;
 	    $isoName = '';
@@ -196,6 +211,8 @@ foreach my $movieFile (@movieFiles) {
 		    &ReadSTM($movieFileOffset);
 		} elsif ( $movieFormat eq 'sga' ) {
 		    &ReadSGA($movieFileOffset);
+		} elsif ( $movieFormat eq 'pcmraw' ) {
+		    &ReadPCMRaw($movieFileOffset,$movieFileSize);
 		} else {
 		    die "Bad movie format: $movieFormat\n";
 		}
@@ -423,6 +440,22 @@ sub ReadSGA {
     return 1;
 }
 
+sub ReadPCMRaw {
+    my ($movieFileOffset,$movieFileSize) = @_;
+
+    my $pcmSize = $movieFileSize-$movieFileOffset;
+    my $pcmData = '';
+
+    if ( read(MOVIE,$pcmData,$pcmSize) != $pcmSize ) {
+	print STDERR "not enough characters for a PCM data\n";
+	return 0;
+    }
+
+    &SegaCDPCMToWav(1,-1,$pcmData);
+
+    return 1;
+}
+
 sub ReadCinepakForSega {
     my ($movieFile,$movieFileOffset) = @_;
 
@@ -582,6 +615,11 @@ sub ReadCinepakForSega {
 	    seek(MOVIE,$movieFileOffset+$filmSTABOffset+0x10,0);
 	}
 
+
+	if ( $filmVideoCodec eq 'cvid' ) {
+	    
+	}
+
 	if ( ! ( ( $filmFormatVersion == 0x00000000 ||
 		   $filmFormatVersion == 0x00020000 ) &&
 		 ( $filmVideoCodec eq 'sega' ||
@@ -589,7 +627,9 @@ sub ReadCinepakForSega {
 		   $filmVideoCodec eq 'Seg3' ||
 		   $filmVideoCodec eq 'Seg4' ||
 		   $filmVideoCodec eq 'SEGA' ||
-		   $filmVideoCodec eq (chr(0x00)x4) ) ) ) {
+		   $filmVideoCodec eq (chr(0x00)x4) ||
+		   ( $isEcco32x &&
+		     $filmVideoCodec eq 'cvid' ) ) ) ) {
 	    print STDERR "currently only support sega video version and codec: ".sprintf("0x%8.8X",$filmFormatVersion)." and $filmVideoCodec\n";
 	    return 0;
 	}
@@ -649,6 +689,7 @@ sub ReadCinepakForSega {
 		seek(MOVIE,$movieFileOffset+$filmHeaderLength+$sampleOffset,0);
 	    }
 	}
+
 	if ( $sampleInfo1 == 0xFFFFFFFF ) {
 	    # audio sample
 	    $infoAudioFrames++;
@@ -676,320 +717,417 @@ sub ReadCinepakForSega {
 	    } elsif ( $frameDuration >= 0 && $frameDuration != $sampleInfo2 ) {
 		$frameDuration = -2;
 	    }
-	    my $sampleStart = '';
-	    if ( read(MOVIE,$sampleStart,2) != 2 ) {
-		print STDERR "Could not read sample start: $sampleIndex\n";
-		return 0;
-	    }
-	    
-	    if ( $sampleStart ne 'SM' ) {
-		print STDERR "Unsupported sample start: $sampleStart: $sampleIndex\n";
-		# use next to partially allow decoding the bad Joe Montana files
-		# next;
-		return 0;
-	    }
-	    
-	    my $sampleFlagsString = '';
-	    if ( read(MOVIE,$sampleFlagsString,2) != 2 ) {
-		print STDERR "Could not read sample flags\n";
-		return 0;
-	    }
-	    
-	    my $sampleFlags = unpack("n",$sampleFlagsString);
-	    my $paletteCount = ( $sampleFlags & 0x0003 ) + 1;
-	    # TODO unsure what the different values mean
-	    if ( ( $sampleFlags & 0xFFFC ) != 0x0020 &&
-		 ( $sampleFlags & 0xFFFC ) != 0x2000 ) {
-		print STDERR sprintf("Unacceptible sample flags: 0x%4.4X\n",$sampleFlags);
-		return 0;
-	    }
-	    $infoPalettes += $paletteCount;
-	    
-	    my $cvidHeader = '';
-	    if ( read(MOVIE,$cvidHeader,8) != 8 ) {
-		print STDERR "Could not read sample start\n";
-		return 0;
-	    }
-	    my $cvidFlags = ord(substr($cvidHeader,0,1));
-	    my $cvidLength = unpack("N",chr(0x00).substr($cvidHeader,1,3));
-	    my $cvidWidth = unpack("n",substr($cvidHeader,4,2));
-	    my $cvidHeight = unpack("n",substr($cvidHeader,6,2));
-	    if ( ! $isCodeMonkeys &&
-		 ( $cvidWidth != int(($filmVideoWidth+7)/8) ||
-		   $cvidHeight != int(($filmVideoHeight+7)/8) ) ) {
-		print STDERR "Unsupported deviant cvid $filmVideoWidth $filmVideoHeight $cvidWidth $cvidHeight\n";
-	    }
-	    
-	    my $paletteData = '';
-	    if ( read(MOVIE,$paletteData,32*$paletteCount) != 32*$paletteCount ) {
-		print STDERR "Could not read palette data: $sampleIndex\n";
-		return 0;
-	    }
-	    for (my $i = 0; $i < 32*$paletteCount; $i += 2) {
-		my $paletteEntryString = substr($paletteData,$i,2);
-		my $paletteEntry = unpack("n",$paletteEntryString);
-		if ( $paletteEntry & 0xF111 ) {
-		    print "Unacceptable palette data ($i): ".sprintf("%4.4X",$paletteEntry)."\n";
-		    return 0;
-		}
-		# ignore transparent color, not even copied by code
-		if ( $i % 32 != 0 &&
-		     ! exists $uniqueColorsMap{$paletteEntryString} ) {
-		    $uniqueColorsMap{$paletteEntryString} = 1;
-		    $uniqueColors++;
-		}
-	    }
 
-	    for ( my $i = 0; $i < $paletteCount; $i++ ) {
-		# ignore transparent color, not even copied by code
-		my $pal = substr($paletteData,$i*32+2,30);
-		if ( ! exists $uniquePalettesMap{$pal} ) {
-		    $uniquePalettesMap{$pal} = 1;
-		    $uniquePalettes++;
-		}
-	    }
-    
-	    # round up to nearest double word
-	    my $paletteMapLength = 4*int(($cvidWidth*$cvidHeight+15)/16);
-	    my $paletteMap = '';
-	    if ( $paletteCount > 1 ) {
-		if ( read(MOVIE,$paletteMap,$paletteMapLength) != $paletteMapLength ) {
-		    print STDERR "Could not read palette map data: $sampleIndex\n";
+	    if ($isEcco32x) {
+		# Ecco 32x demo uses real cinepak format (with caveats)
+
+		# cvid frame header
+		my $cvidFrameHeader = '';
+		if ( read(MOVIE,$cvidFrameHeader,10) != 10 ) {
+		    print STDERR "Could not read cvid frame header: $sampleIndex\n";
 		    return 0;
 		}
-		my @palettesUsed = (0,0,0,0);
-		for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
-		    my $pal = (ord(substr($paletteMap,int($tileIndex/4),1))>>2*((3-($tileIndex%4)))) & 0x3;
-		    if ( $pal > $paletteCount ) {
-			print "Unacceptable palette map data ($tileIndex): $pal\n";
+		my $cvidFrameFlags = ord(substr($cvidFrameHeader,0,1));
+		my $cvidFrameLength = unpack("N",substr($cvidFrameHeader,0,4)) & 0x00FFFFFF;
+		# correct invalid frame length
+		if ( $cvidFrameLength = $sampleLength - 8 ) {
+		    $cvidFrameLength = $sampleLength;
+		}
+		my $cvidFrameWidth = unpack("n",substr($cvidFrameHeader,4,2));
+		my $cvidFrameHeight = unpack("n",substr($cvidFrameHeader,6,2));
+		my $cvidFrameStrips = unpack("n",substr($cvidFrameHeader,8,2));
+
+		if ( 1 ) {
+		    my $cvidFrameData = '';
+		    my $cvidFrameDataLength = $cvidFrameLength-10;
+		    read(MOVIE,$cvidFrameData,$cvidFrameDataLength);
+		    my $cvidFileName = sprintf("cvid%4.4X.bin",$sampleIndex);
+		    open(CVID,'>'.$cvidFileName);
+		    print CVID ($cvidFrameHeader.$cvidFrameData);
+		    close CVID;
+		    next;
+		}
+
+		if ( $filmVideoWidth != $cvidFrameWidth ||
+		     $filmVideoHeight != $cvidFrameHeight ) {
+		    print "$filmVideoWidth x $filmVideoHeight -> $cvidFrameWidth x $cvidFrameHeight\n";
+		}
+
+		my $cvidFrameUsed = 10;
+		my $cvidFrameStripCount = 0;
+		my $cvidFrameStripID = 0;
+		
+		while ( $cvidFrameUsed < $cvidFrameLength ) {
+		    my $cvidChunkHeader = '';
+		    if ( read(MOVIE,$cvidChunkHeader,4) != 4 ) {
+			print STDERR "Could not read cvid chunk header: $sampleIndex\n";
 			return 0;
 		    }
-		    $palettesUsed[$pal]++;
-		}
-		my $palettesUnused = 0;
-		for ( my $i = 0; $i < $paletteCount; $i++ ) {
-		    if ( ! $palettesUsed[$i] ) {
-			$palettesUnused++;
+		    my $cvidChunkID     = unpack("n",substr($cvidChunkHeader,0,2));
+		    my $cvidChunkLength = unpack("n",substr($cvidChunkHeader,2,2));
+
+		    my $cvidChunkLengthFake = $cvidChunkLength;
+		    if ( $cvidChunkID == 0x1000 ||
+			 $cvidChunkID == 0x1100 ) {
+			$cvidFrameStripID = $cvidChunkID;
+			$cvidFrameStripCount++;
+			$cvidChunkLengthFake = 12;
+		    }
+
+		    my $cvidChunkData = '';
+		    my $cvidChunkDataLengthFake = $cvidChunkLengthFake - 4;
+		    if ( read(MOVIE,$cvidChunkData,$cvidChunkDataLengthFake) != $cvidChunkDataLengthFake) {
+			print STDERR "Could not read cvid chunk data: $sampleIndex\n";
+			return 0;
+		    }
+
+		    $cvidFrameUsed += $cvidChunkLengthFake;
+
+		    if ( $cvidChunkID == 0xFE00 ) {
+			# cvid sega useless chunk
+			if ( $cvidChunkLength != 0x0006 ||
+			     $cvidChunkData ne (chr(0x00).chr(0x00)) ) {
+			    print STDERR "Unexpected useless Sega cinepak chunk\n";
+			}
+		    } elsif ( $cvidChunkID == 0x1000 ||
+			      $cvidChunkID == 0x1100 ) {
+			# cvid strip header
+			my $cvidStripY1 = unpack("n",substr($cvidChunkData,0,2));
+			my $cvidStripX1 = unpack("n",substr($cvidChunkData,2,2));
+			my $cvidStripY2 = unpack("n",substr($cvidChunkData,4,2));
+			my $cvidStripX2 = unpack("n",substr($cvidChunkData,6,2));
+			if ( $cvidStripY1 != 0 || $cvidStripX1 != 0 ||
+			     $cvidStripY2 != $cvidFrameHeight ||
+			     $cvidStripX2 != $cvidFrameWidth ) {
+			    print "cvid strip non-full: $cvidStripX1 x $cvidStripY1 to $cvidStripX2 x $cvidStripY2\n";
+			}
+		    } elsif ( $cvidChunkID == 0x2000 ) {
+			# cvid chunk cinepak data
+		    } elsif ( $cvidChunkID == 0x2200 ) {
+			# cvid chunk cinepak data
+		    } elsif ( $cvidChunkID == 0x3000 ) {
+			# cvid chunk cinepak data
+		    } else {
+			printf("unknown 0x%4.4X 0x%4.4X\n",$cvidChunkID,$cvidChunkLength);
 		    }
 		}
-		$infoPalettesUnused += $palettesUnused;
-		if ( $extractImageData &&
-		     $optimizePalettes &&
-		     $palettesUnused ) {
-		    my $paletteDataNew = '';
-		    my @paletteNew = (0,1,2,3);
-		    my $paletteCurrent = 0;
+	    } else {
+		# Sega CD cinepak
+		my $sampleStart = '';
+		if ( read(MOVIE,$sampleStart,2) != 2 ) {
+		    print STDERR "Could not read sample start: $sampleIndex\n";
+		    return 0;
+		}
+	    
+		if ( $sampleStart ne 'SM' ) {
+		    print STDERR "Unsupported sample start: $sampleStart: $sampleIndex\n";
+		    # use next to partially allow decoding the bad Joe Montana files
+		    # next;
+		    return 0;
+		}
+	    
+		my $sampleFlagsString = '';
+		if ( read(MOVIE,$sampleFlagsString,2) != 2 ) {
+		    print STDERR "Could not read sample flags\n";
+		    return 0;
+		}
+	    
+		my $sampleFlags = unpack("n",$sampleFlagsString);
+		my $paletteCount = ( $sampleFlags & 0x0003 ) + 1;
+		# TODO unsure what the different values mean
+		if ( ( $sampleFlags & 0xFFFC ) != 0x0020 &&
+		     ( $sampleFlags & 0xFFFC ) != 0x2000 ) {
+		    print STDERR sprintf("Unacceptible sample flags: 0x%4.4X\n",$sampleFlags);
+		    return 0;
+		}
+		$infoPalettes += $paletteCount;
+	    
+		my $cvidHeader = '';
+		if ( read(MOVIE,$cvidHeader,8) != 8 ) {
+		    print STDERR "Could not read sample start\n";
+		    return 0;
+		}
+		my $cvidFlags = ord(substr($cvidHeader,0,1));
+		my $cvidLength = unpack("N",chr(0x00).substr($cvidHeader,1,3));
+		my $cvidWidth = unpack("n",substr($cvidHeader,4,2));
+		my $cvidHeight = unpack("n",substr($cvidHeader,6,2));
+		if ( ! $isCodeMonkeys &&
+		     ( $cvidWidth != int(($filmVideoWidth+7)/8) ||
+		       $cvidHeight != int(($filmVideoHeight+7)/8) ) ) {
+		    print STDERR "Unsupported deviant cvid $filmVideoWidth $filmVideoHeight $cvidWidth $cvidHeight\n";
+		}
+	    
+		my $paletteData = '';
+		if ( read(MOVIE,$paletteData,32*$paletteCount) != 32*$paletteCount ) {
+		    print STDERR "Could not read palette data: $sampleIndex\n";
+		    return 0;
+		}
+		for (my $i = 0; $i < 32*$paletteCount; $i += 2) {
+		    my $paletteEntryString = substr($paletteData,$i,2);
+		    my $paletteEntry = unpack("n",$paletteEntryString);
+		    if ( $paletteEntry & 0xF111 ) {
+			print "Unacceptable palette data ($i): ".sprintf("%4.4X",$paletteEntry)."\n";
+			return 0;
+		    }
+		    # ignore transparent color, not even copied by code
+		    if ( $i % 32 != 0 &&
+			 ! exists $uniqueColorsMap{$paletteEntryString} ) {
+			$uniqueColorsMap{$paletteEntryString} = 1;
+			$uniqueColors++;
+		    }
+		}
+
+		for ( my $i = 0; $i < $paletteCount; $i++ ) {
+		    # ignore transparent color, not even copied by code
+		    my $pal = substr($paletteData,$i*32+2,30);
+		    if ( ! exists $uniquePalettesMap{$pal} ) {
+			$uniquePalettesMap{$pal} = 1;
+			$uniquePalettes++;
+		    }
+		}
+    
+		# round up to nearest double word
+		my $paletteMapLength = 4*int(($cvidWidth*$cvidHeight+15)/16);
+		my $paletteMap = '';
+		if ( $paletteCount > 1 ) {
+		    if ( read(MOVIE,$paletteMap,$paletteMapLength) != $paletteMapLength ) {
+			print STDERR "Could not read palette map data: $sampleIndex\n";
+			return 0;
+		    }
+		    my @palettesUsed = (0,0,0,0);
+		    for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
+			my $pal = (ord(substr($paletteMap,int($tileIndex/4),1))>>2*((3-($tileIndex%4)))) & 0x3;
+			if ( $pal > $paletteCount ) {
+			    print "Unacceptable palette map data ($tileIndex): $pal\n";
+			    return 0;
+			}
+			$palettesUsed[$pal]++;
+		    }
+		    my $palettesUnused = 0;
 		    for ( my $i = 0; $i < $paletteCount; $i++ ) {
-			$paletteNew[$i] = $paletteCurrent;
-			if ( $palettesUsed[$i] ) {
-			    $paletteDataNew .= substr($paletteData,$i*32,32);
-			    $paletteCurrent++;
+			if ( ! $palettesUsed[$i] ) {
+			    $palettesUnused++;
 			}
 		    }
-		    $paletteData = $paletteDataNew;
-		    for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
-			my $palMapIndex = int($tileIndex/4);
-			my $palMapShift = 2*((3-($tileIndex%4)));
-			my $palMapChar = ord(substr($paletteMap,$palMapIndex,1));
-			my $pal = ($palMapChar>>$palMapShift) & 0x3;
-			my $palNew = $paletteNew[$pal];
-			my $palMask = 3 << $palMapShift;
-			substr($paletteMap,$palMapIndex,1) = chr( ( ( $palMapChar & ~$palMask ) | ( $palNew << $palMapShift ) ) );
+		    $infoPalettesUnused += $palettesUnused;
+		    if ( $extractImageData &&
+			 $optimizePalettes &&
+			 $palettesUnused ) {
+			my $paletteDataNew = '';
+			my @paletteNew = (0,1,2,3);
+			my $paletteCurrent = 0;
+			for ( my $i = 0; $i < $paletteCount; $i++ ) {
+			    $paletteNew[$i] = $paletteCurrent;
+			    if ( $palettesUsed[$i] ) {
+				$paletteDataNew .= substr($paletteData,$i*32,32);
+				$paletteCurrent++;
+			    }
+			}
+			$paletteData = $paletteDataNew;
+			for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
+			    my $palMapIndex = int($tileIndex/4);
+			    my $palMapShift = 2*((3-($tileIndex%4)));
+			    my $palMapChar = ord(substr($paletteMap,$palMapIndex,1));
+			    my $pal = ($palMapChar>>$palMapShift) & 0x3;
+			    my $palNew = $paletteNew[$pal];
+			    my $palMask = 3 << $palMapShift;
+			    substr($paletteMap,$palMapIndex,1) = chr( ( ( $palMapChar & ~$palMask ) | ( $palNew << $palMapShift ) ) );
+			}
+			$paletteCount = length($paletteData)/32;
+			if ( ! $optimizePalettesAllowSinglePalette &&
+			     $paletteCount == 1 ) {
+			    $paletteData .= chr(0x00)x32;
+			}
+			$paletteCount = length($paletteData)/32;
 		    }
-		    $paletteCount = length($paletteData)/32;
-		    if ( ! $optimizePalettesAllowSinglePalette &&
-			 $paletteCount == 1 ) {
-			$paletteData .= chr(0x00)x32;
+		
+		}
+	    
+		my $cinepakFrameSize = 0;
+	    
+		my $codebook32ByteCountString = '';
+		if ( read(MOVIE,$codebook32ByteCountString,4) != 4 ) {
+		    print STDERR "Could not read codebook 32 byte count\n";
+		    return 0;
+		}
+		$cinepakFrameSize += 4;
+	    
+		my $codebook32ByteCount = unpack("N",$codebook32ByteCountString);
+		if ( ( $codebook32ByteCount & 3 ) ||
+		     $codebook32ByteCount < 0 ||
+		     $codebook32ByteCount > 256*4 ) {
+		    print STDERR "Unsupported code word 32 byte count: $codebook32ByteCount\n";
+		    return 0;
+		}
+		$infoCodebook32ByteCount += $codebook32ByteCount;
+	    
+		my $codebook32Data = '';
+		if ( read(MOVIE,$codebook32Data,$codebook32ByteCount) != $codebook32ByteCount ) {
+		    print STDERR "Could not read codebook 32 data\n";
+		    return 0;
+		}
+		$cinepakFrameSize += $codebook32ByteCount;
+	    
+		my $codebook16ByteCountString = '';
+		if ( read(MOVIE,$codebook16ByteCountString,4) != 4 ) {
+		    print STDERR "Could not read codebook 16 byte count\n";
+		    return 0;
+		}
+		$cinepakFrameSize += 4;
+	    
+		my $codebook16ByteCount = unpack("N",$codebook16ByteCountString);
+		if ( ( $codebook16ByteCount & 1 ) ||
+		     $codebook16ByteCount < 0 ||
+		     $codebook16ByteCount > 256*2 ) {
+		    print STDERR "Unsupported code word 16 byte count: $codebook16ByteCount\n";
+		    return 0;
+		}
+		$infoCodebook16ByteCount += $codebook16ByteCount;
+		
+		my $codebook16Data = '';
+		if ( read(MOVIE,$codebook16Data,$codebook16ByteCount) != $codebook16ByteCount ) {
+		    print STDERR "Could not read codebook 16 data\n";
+		    return 0;
+		}
+		$cinepakFrameSize += $codebook16ByteCount;
+		
+		my $methodFlagsValue = 0;
+		my $methodFlagsIndex = -2;
+		my @methodFlags;
+	    
+		for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
+		    if ( $methodFlagsIndex < 0 ) {
+			my $methodFlagsString = '';
+			if ( read(MOVIE,$methodFlagsString,4) != 4 ) {
+			    print STDERR "Could not read method flags data\n";
+			    return 0;
+			}
+			$cinepakFrameSize += 4;
+			$methodFlagsValue = unpack("N",$methodFlagsString);
+			$methodFlagsIndex = 30;
 		    }
-		    $paletteCount = length($paletteData)/32;
+		    my $methodFlag = ($methodFlagsValue >> $methodFlagsIndex) & 3;
+		    $methodFlagsIndex -= 2;
+		    $infoMethodFlags[$methodFlag]++;
+		
+		    push @methodFlags, $methodFlag;
 		}
 		
-	    }
-	    
-	    my $cinepakFrameSize = 0;
-	    
-	    my $codebook32ByteCountString = '';
-	    if ( read(MOVIE,$codebook32ByteCountString,4) != 4 ) {
-		print STDERR "Could not read codebook 32 byte count\n";
-		return 0;
-	    }
-	    $cinepakFrameSize += 4;
-	    
-	    my $codebook32ByteCount = unpack("N",$codebook32ByteCountString);
-	    if ( ( $codebook32ByteCount & 3 ) ||
-		 $codebook32ByteCount < 0 ||
-		 $codebook32ByteCount > 256*4 ) {
-		print STDERR "Unsupported code word 32 byte count: $codebook32ByteCount\n";
-		return 0;
-	    }
-	    $infoCodebook32ByteCount += $codebook32ByteCount;
-	    
-	    my $codebook32Data = '';
-	    if ( read(MOVIE,$codebook32Data,$codebook32ByteCount) != $codebook32ByteCount ) {
-		print STDERR "Could not read codebook 32 data\n";
-		return 0;
-	    }
-	    $cinepakFrameSize += $codebook32ByteCount;
-	    
-	    my $codebook16ByteCountString = '';
-	    if ( read(MOVIE,$codebook16ByteCountString,4) != 4 ) {
-		print STDERR "Could not read codebook 16 byte count\n";
-		return 0;
-	    }
-	    $cinepakFrameSize += 4;
-	    
-	    my $codebook16ByteCount = unpack("N",$codebook16ByteCountString);
-	    if ( ( $codebook16ByteCount & 1 ) ||
-		 $codebook16ByteCount < 0 ||
-		 $codebook16ByteCount > 256*2 ) {
-		print STDERR "Unsupported code word 16 byte count: $codebook16ByteCount\n";
-		return 0;
-	    }
-	    $infoCodebook16ByteCount += $codebook16ByteCount;
-		
-	    my $codebook16Data = '';
-	    if ( read(MOVIE,$codebook16Data,$codebook16ByteCount) != $codebook16ByteCount ) {
-		print STDERR "Could not read codebook 16 data\n";
-		return 0;
-	    }
-	    $cinepakFrameSize += $codebook16ByteCount;
-		
-	    my $methodFlagsValue = 0;
-	    my $methodFlagsIndex = -2;
-	    my @methodFlags;
-	    
-	    for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
-		if ( $methodFlagsIndex < 0 ) {
-		    my $methodFlagsString = '';
-		    if ( read(MOVIE,$methodFlagsString,4) != 4 ) {
-			print STDERR "Could not read method flags data\n";
-			return 0;
-		    }
-		    $cinepakFrameSize += 4;
-		    $methodFlagsValue = unpack("N",$methodFlagsString);
-		    $methodFlagsIndex = 30;
+		my $codebook32Size = $codebook32ByteCount / 4;
+		my @codebook32Used;
+		for ( my $i = 0; $i < $codebook32Size; $i++ ) {
+		    $codebook32Used[$i] = 0;
 		}
-		my $methodFlag = ($methodFlagsValue >> $methodFlagsIndex) & 3;
-		$methodFlagsIndex -= 2;
-		$infoMethodFlags[$methodFlag]++;
-		
-		push @methodFlags, $methodFlag;
-	    }
-		
-	    my $codebook32Size = $codebook32ByteCount / 4;
-	    my @codebook32Used;
-	    for ( my $i = 0; $i < $codebook32Size; $i++ ) {
-		$codebook32Used[$i] = 0;
-	    }
 	    
-	    my $codebook16Size = $codebook16ByteCount / 4;
-	    my @codebook16Used;
-	    for ( my $i = 0; $i < $codebook16Size; $i++ ) {
-		$codebook16Used[$i] = 0;
-	    }
+		my $codebook16Size = $codebook16ByteCount / 4;
+		my @codebook16Used;
+		for ( my $i = 0; $i < $codebook16Size; $i++ ) {
+		    $codebook16Used[$i] = 0;
+		}
 	    
-	    my $tileData = '';
-	    for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
-		my $methodFlag = $methodFlags[$tileIndex];
-		my $tileDataForIndex = '';
-		if ( $methodFlag == 0 ) {
-		    if ( $imageIndex < 2 ) {
-			print STDERR "Bad double buffer\n";
-			return 0;
+		my $tileData = '';
+		for ( my $tileIndex = 0; $tileIndex < $cvidWidth*$cvidHeight; $tileIndex++ ) {
+		    my $methodFlag = $methodFlags[$tileIndex];
+		    my $tileDataForIndex = '';
+		    if ( $methodFlag == 0 ) {
+			if ( $imageIndex < 2 ) {
+			    print STDERR "Bad double buffer\n";
+			    return 0;
+			}
+			$tileDataForIndex = substr($tileDataLast2,32*$tileIndex,32);
+		    } elsif ( $methodFlag == 1 ) {
+			if ( read(MOVIE,$tileDataForIndex,32) != 32 ) {
+			    print STDERR "Could not read tile data\n";
+			    return 0;
+			}
+			$cinepakFrameSize += 32;
+		    } elsif ( $methodFlag == 2 ) {
+			my $data = '';
+			if ( read(MOVIE,$data,8) != 8 ) {
+			    print STDERR "Could not read tile data\n";
+			    return 0;
+			}
+			$cinepakFrameSize += 8;
+			for ( my $i = 0; $i <= 3; $i++ ) {
+			    my $c0index = ord(substr($data,2*$i,1));
+			    my $c1index = ord(substr($data,2*$i+1,1));
+			    $codebook32Used[$c0index]++;
+			    $codebook32Used[$c1index]++;
+			    my $c0 = substr($codebook32Data,4*$c0index,4);
+			    my $c1 = substr($codebook32Data,4*$c1index,4);
+			    $tileDataForIndex .= substr($c0,0,2).substr($c1,0,2).substr($c0,2,2).substr($c1,2,2);
+			}
+		    } else {
+			my $data = '';
+			if ( read(MOVIE,$data,16) != 16 ) {
+			    print STDERR "Could not read tile data\n";
+			    return 0;
+			}
+			$cinepakFrameSize += 16;
+			for ( my $i = 0; $i <= 3; $i++ ) {
+			    my $c0index = ord(substr($data,4*$i,1));
+			    my $c1index = ord(substr($data,4*$i+1,1));
+			    my $c2index = ord(substr($data,4*$i+2,1));
+			    my $c3index = ord(substr($data,4*$i+3,1));
+			    $codebook16Used[$c0index]++;
+			    $codebook16Used[$c1index]++;
+			    $codebook16Used[$c2index]++;
+			    $codebook16Used[$c3index]++;
+			    my $c0 = substr($codebook16Data,2*$c0index,2);
+			    my $c1 = substr($codebook16Data,2*$c1index,2);
+			    my $c2 = substr($codebook16Data,2*$c2index,2);
+			    my $c3 = substr($codebook16Data,2*$c3index,2);
+			    $tileDataForIndex .= substr($c0,0,1).substr($c1,0,1).substr($c2,0,1).substr($c3,0,1).substr($c0,1,1).substr($c1,1,1).substr($c2,1,1).substr($c3,1,1);
+			}
 		    }
-		    $tileDataForIndex = substr($tileDataLast2,32*$tileIndex,32);
-		} elsif ( $methodFlag == 1 ) {
-		    if ( read(MOVIE,$tileDataForIndex,32) != 32 ) {
-			print STDERR "Could not read tile data\n";
-			return 0;
-		    }
-		    $cinepakFrameSize += 32;
-		} elsif ( $methodFlag == 2 ) {
-		    my $data = '';
-		    if ( read(MOVIE,$data,8) != 8 ) {
-			print STDERR "Could not read tile data\n";
-			return 0;
-		    }
-		    $cinepakFrameSize += 8;
-		    for ( my $i = 0; $i <= 3; $i++ ) {
-			my $c0index = ord(substr($data,2*$i,1));
-			my $c1index = ord(substr($data,2*$i+1,1));
-			$codebook32Used[$c0index]++;
-			$codebook32Used[$c1index]++;
-			my $c0 = substr($codebook32Data,4*$c0index,4);
-			my $c1 = substr($codebook32Data,4*$c1index,4);
-			$tileDataForIndex .= substr($c0,0,2).substr($c1,0,2).substr($c0,2,2).substr($c1,2,2);
-		    }
-		} else {
-		    my $data = '';
-		    if ( read(MOVIE,$data,16) != 16 ) {
-			print STDERR "Could not read tile data\n";
-			return 0;
-		    }
-		    $cinepakFrameSize += 16;
-		    for ( my $i = 0; $i <= 3; $i++ ) {
-			my $c0index = ord(substr($data,4*$i,1));
-			my $c1index = ord(substr($data,4*$i+1,1));
-			my $c2index = ord(substr($data,4*$i+2,1));
-			my $c3index = ord(substr($data,4*$i+3,1));
-			$codebook16Used[$c0index]++;
-			$codebook16Used[$c1index]++;
-			$codebook16Used[$c2index]++;
-			$codebook16Used[$c3index]++;
-			my $c0 = substr($codebook16Data,2*$c0index,2);
-			my $c1 = substr($codebook16Data,2*$c1index,2);
-			my $c2 = substr($codebook16Data,2*$c2index,2);
-			my $c3 = substr($codebook16Data,2*$c3index,2);
-			$tileDataForIndex .= substr($c0,0,1).substr($c1,0,1).substr($c2,0,1).substr($c3,0,1).substr($c0,1,1).substr($c1,1,1).substr($c2,1,1).substr($c3,1,1);
+		    $tileData .= $tileDataForIndex;
+		    if ( $methodFlag != 0 && $imageIndex >= 2 ) {
+			if ( $tileDataForIndex eq substr($tileDataLast2,32*$tileIndex,32) ) {
+			    $infoReusableTilesNotReused++;
+			}
 		    }
 		}
-		$tileData .= $tileDataForIndex;
-		if ( $methodFlag != 0 && $imageIndex >= 2 ) {
-		    if ( $tileDataForIndex eq substr($tileDataLast2,32*$tileIndex,32) ) {
-			$infoReusableTilesNotReused++;
-		    }
-		}
-	    }
 
-	    for ( my $i = 0; $i < $codebook32Size; $i++ ) {
-		if ( ! $codebook32Used[$i] ) {
-		    $infoCodebook32Unused++;
+		for ( my $i = 0; $i < $codebook32Size; $i++ ) {
+		    if ( ! $codebook32Used[$i] ) {
+			$infoCodebook32Unused++;
+		    }
 		}
-	    }
-	    for ( my $i = 0; $i < $codebook16Size; $i++ ) {
-		if ( ! $codebook16Used[$i] ) {
-		    $infoCodebook16Unused++;
+		for ( my $i = 0; $i < $codebook16Size; $i++ ) {
+		    if ( ! $codebook16Used[$i] ) {
+			$infoCodebook16Unused++;
+		    }
 		}
-	    }
 
-	    $infoUncompressedSize += length($tileData);
-	    $infoCinepakSize += $cinepakFrameSize;
+		$infoUncompressedSize += length($tileData);
+		$infoCinepakSize += $cinepakFrameSize;
 
-	    &WriteImageData($imageIndex,8*$cvidWidth,$paletteData,$paletteMap,$tileData,'');
+		&WriteImageData($imageIndex,8*$cvidWidth,$paletteData,$paletteMap,$tileData,'');
 
-	    if ( $scdcinepakencodeframeCompare ) {
-		my $scdcinepakencodeframeSize = -s "cinepaktiledata00000.bin";
-		if ( $cinepakFrameSize < $scdcinepakencodeframeSize ) {
-		    print "scdcinepakencodeframeCompare: stabindex($sampleIndex) imageindex($imageIndex) original($cinepakFrameSize) scdcinepakencodeframe($scdcinepakencodeframeSize)\n";
+		if ( $scdcinepakencodeframeCompare ) {
+		    my $scdcinepakencodeframeSize = -s "cinepaktiledata00000.bin";
+		    if ( $cinepakFrameSize < $scdcinepakencodeframeSize ) {
+			print "scdcinepakencodeframeCompare: stabindex($sampleIndex) imageindex($imageIndex) original($cinepakFrameSize) scdcinepakencodeframe($scdcinepakencodeframeSize)\n";
+		    }
+		    $infoCinepakSizeScdcinepakencodeframe += $scdcinepakencodeframeSize;
 		}
-		$infoCinepakSizeScdcinepakencodeframe += $scdcinepakencodeframeSize;
-	    }
 	    
-	    # test all image data for an unchanged frame
-	    if ( $paletteData eq $paletteDataLast1 &&
-		 $paletteMap  eq $paletteMapLast1 &&
-		 $tileData    eq $tileDataLast1 ) {
-		$infoUnchangedFrames++;
-	    }
+		# test all image data for an unchanged frame
+		if ( $paletteData eq $paletteDataLast1 &&
+		     $paletteMap  eq $paletteMapLast1 &&
+		     $tileData    eq $tileDataLast1 ) {
+		    $infoUnchangedFrames++;
+		}
 
-	    # double buffer image data
-	    $paletteDataLast2 = $paletteDataLast1;
-	    $paletteDataLast1 = $paletteData;
-	    $paletteMapLast2 = $paletteMapLast1;
-	    $paletteMapLast1 = $paletteMap;
-	    $tileDataLast2 = $tileDataLast1;
-	    $tileDataLast1 = $tileData;
-	    $imageIndex++;
+		# double buffer image data
+		$paletteDataLast2 = $paletteDataLast1;
+		$paletteDataLast1 = $paletteData;
+		$paletteMapLast2 = $paletteMapLast1;
+		$paletteMapLast1 = $paletteMap;
+		$tileDataLast2 = $tileDataLast1;
+		$tileDataLast1 = $tileData;
+		$imageIndex++;
+	    }
 	}
     }
 
@@ -1091,6 +1229,16 @@ sub SegaCDPCMToWav {
 	}
 
 	if ( $extractWav ) {
+	    if ( $pcmFD >= 0 ) {
+		$wavSampleRate = int(12500000/384.0*$pcmFD/0x800);
+	    }
+	    if ( $sampleRate >= 0 ) {
+		$wavSampleRate = $sampleRate;
+	    }
+	    if ( $wavSampleRate < 0 ) {
+		die "This movie format requires -pcmfd option since movie format does not specify one\n";
+	    }
+
 	    if ( ! open( WAV, '>'.$wavFile ) ) {
 		print STDERR "Could not open $wavFile\n";
 		return 0;
@@ -1204,8 +1352,11 @@ scdmovieencode [options] <moviefiles...>
   -cinepak           decode as cinepak for sega format [default]
   -tomcatalley       decode as Tomcat Alley\'s deviation of cinepak
   -codemonkeys       decode as Wirehead/SurgicalStrike\'s deviation of cinepak
+  -ecco32x           decode as Ecco 32X demo deviation of cinepak
   -stm               decode as Sonic CD\'s OPN.STM format
   -sga               decode as SGA format
+  -pcmraw            decode as raw PCM
+  -pcmfd=<#>         override pcmFD value
   -extractimagedata  extract paldata*.bin, palmap*.bin, and tiledata*.bin
   -extractpngs       convert image data into pngs using scdtile2img
   -extractpcm        extract raw pcm data (pcm.pcm)

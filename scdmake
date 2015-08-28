@@ -2154,6 +2154,18 @@ sub MakeFPSInc {
     close FPSINC;
 }
 
+sub ApplyOutPrefixSuffixForCountry {
+    if ( $scdcountry =~ m/U/i ) {
+	$outprefixsuffix = '_US';
+    } elsif ( $scdcountry =~ m/J/i ) {
+	$outprefixsuffix = '_JP';
+    } elsif ( $scdcountry =~ m/E/i ) {
+	$outprefixsuffix = '_EU';
+    } elsif ( lc($scdcountry) ne 'all' ) {
+	die "Bad country: $scdcountry\n";
+    }
+}
+
 sub CheckForRebuildAll {
     if ( lc($scdcountry) eq 'all' ) {
 	$scdcountryAllRequiresFullRebuild = 1;

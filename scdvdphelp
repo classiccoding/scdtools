@@ -10,7 +10,7 @@ if ( $#ARGV != 0 ) {
 
 my $value = $ARGV[0];
 
-if ( $value =~ m/^\s*w\s*(?:0x|\$|)([0-9A-F]{8})\s*$/ ) {
+if ( $value =~ m/^\s*w\s*(?:0x|\$|)([0-9A-F]{8})\s*$/i ) {
     my $value = hex($1);
     my $code =
 	( ( $value & 0x000000F0) >> ( 4-2) ) |
@@ -31,6 +31,31 @@ if ( $value =~ m/^\s*w\s*(?:0x|\$|)([0-9A-F]{8})\s*$/ ) {
 	$type = 'CRAM';
     }
     printf("Type: %s, R/W: %s, DMA: %d, Code: %2.2X, Address %4.4X\n",$type,$rw,$dma,$code,$address);
+} elsif ( $value =~ m/^\s*([wr])\s*(vram|cram|sram)\s*(?:0x|\$|)([0-9A-F]{4})\s*$/i ) {
+    my $rw = $1;
+    my $ram = $2;
+    my $address = hex($3);
+    my $code = 0;
+    $code |= ( lc($rw) eq 'w' ? 1 : 0 );
+    if ( lc($ram) eq 'vram' ) {
+	$code |= 0;
+    } elsif ( lc($ram) eq 'cram' ) {
+	if ( $code & 1 ) {
+	    $code |= 2;
+	} else {
+	    $code |= 8;
+	}
+    } elsif ( lc($ram) eq 'sram' ) {
+	$code |= 4;
+    } else {
+	die "Bad regexp to if logic\n";
+    }
+    my $value =
+	( ( $address >> 14 ) & 0x00000003 ) |
+	( ( $code    <<  2 ) & 0x000000F0 ) |
+	( ( $address << 16 ) & 0x3FFF0000 ) |
+	( ( $code    << 30 ) & 0xC0000000 );
+    printf("Value: %8.8X\n",$value);
 } else {
     print "Could not parse $value\n";
 }
@@ -44,6 +69,12 @@ scdvdphelp [options]
 
 [options]
   w0xXXXXXXXX   detail what this VDP write does
-
+  wvram0xXXXX   write vram
+  rvram0xXXXX   read  vram
+  wcram0xXXXX   write cram
+  rcram0xXXXX   read  cram
+  wsram0xXXXX   write sram
+  rsram0xXXXX   read  sram
+ 
 ';
 }

@@ -142,7 +142,7 @@ foreach my $arg (@ARGV) {
 	$ditherR = 1;
     } elsif ( $arg =~ /^-nocomments$/i ) {
 	$comments = 0;
-    } elsif ( $arg =~ /^-nolabels$/i ) {
+    } elsif ( $arg =~ /^-nolabels?$/i ) {
 	$labels = 0;
     } elsif ( $arg =~ /^-label=(.+)$/i ) {
 	$label = $1;

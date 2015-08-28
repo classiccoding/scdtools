@@ -30,12 +30,17 @@ if ( $#ARGV < 0 ) {
 
 my $cinepakWidth = 32*8;
 my $cinepakHeight = 14*8;
-my $cinepakIdentifier = 'SEGA';
+my $cinepakIdentifier = '';
 my $cinepakBaseRate = 600;
+
+my $isEcco32x = 0;
 
 my $cinepakFrameDuration = 75;
 
+# all known commerical cinepak videos have at least 2 palettes
+# partially implemented but causes tile data corruption with original decoder
 my $cinepakForceAtLeastTwoPalettes = 1;
+
 # TODO still need calculate frame time before skipped frame before should be enabled
 my $optimizeSkipUnchangedFramesIfPossible = 0;
 
@@ -90,6 +95,8 @@ foreach my $arg (@ARGV) {
 	$palmapsString = $1;
     } elsif ( $arg =~ /^-cinepaktiledatas=(.+)$/i ) {
 	$cinepaktiledatasString = $1;
+    } elsif ( $arg =~ /^-ecco32x$/i ) {
+	$isEcco32x = 1;
     } else {
 	print STDERR "\nCould not parse argument: $arg\n";
 	&Help();
@@ -97,6 +104,14 @@ foreach my $arg (@ARGV) {
 }
 
 ###############################################################################
+
+if ( $cinepakIdentifier eq '' ) {
+    if ( $isEcco32x ) {
+	$cinepakIdentifier = 'cvid';
+    } else {
+	$cinepakIdentifier = 'SEGA';
+    }
+}
 
 my $cinepakSampleTable = '';
 my $cinepakSampleData = '';
@@ -206,10 +221,12 @@ print
     "\tdc.l\t(STABSampleTableEnd-STABSampleTableStart)/16\n".
     "STABSampleTableStart:\n".
     $cinepakSampleTable.
-    # TODO match with Ecco 2 extra bytes
+    # TODO match with Ecco 2 with unused extra bytes
     #"\tdc.l\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n".
     #"\tdc.l\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n".
     "STABSampleTableEnd:\n".
+    # TODO match with Ecco 32x with unused extra bytes
+    "\tdc.l\t0,0,0,0\n".
     "STABEnd:\n".
     "FILMEnd:\n".
     "SampleDataStart:\n".
@@ -227,14 +244,9 @@ sub AddImgFrame {
     if ( 0 ) {
 	print STDERR "AddImgFrame($imgDuration,$imgPalette,$imgPaletteMap,$imgMap)\n";
     }
-    # in case of single palette or missing palettes, keep using last palette
-    if ( $imgPalette eq '' ) {
-	$imgPalette = $imgPaletteLast;
-    }
-    if ( $imgPalette eq '' ) {
-	die "Cannot handle unspecified palette\n";
-    }
+
     $imgDuration *= $pcmFD / 0x0400;
+
     while ( $pcmFrameIndex < $pcmFrameCount &&
 	    $imgTimeCurrent > $pcmTimeCurrent ) {
 	# add pcm frame
@@ -255,54 +267,13 @@ sub AddImgFrame {
 	$pcmFrameIndex += 1;
 	$pcmTimeCurrent += $pcmTimeFrame;
     }
-    # only skip frame if not custom and done with audio frames or don't need
-    # image frame right before next audio frame
-    my $addFrame = 1;
-    if ( $optimizeSkipUnchangedFramesIfPossible &&
-	 $customEncodingFile eq '' &&
-	 $imgPaletteLast ne '' &&
-	 ( $pcmFrameIndex >= $pcmFrameCount ||
-	   $imgTimeCurrent + $imgDuration + 1 < $pcmTimeCurrent ) ) {
-	# ensure palettes are the same
-	if ( &CompareFiles($imgPalette,$imgPaletteLast) ) {
-	    # ensure palette maps are the same
-	    if ( ( $imgPaletteMap eq '' &&
-		   $imgPaletteMapLast eq '' ) ||
-		 ( $imgPaletteMap ne '' &&
-		   $imgPaletteMapLast ne '' &&
-		   &CompareFiles($imgPaletteMap,$imgPaletteMapLast) ) ) {
-		# ensure image map is all zeros
-		# (zero codebook sizes, method map all zeros)
-		if ( open( MAP, $imgMap ) ) {
-		    my $imgMapSize = -s $imgMap;
-		    my $imgMapData = '';
-		    if ( read(MAP,$imgMapData,$imgMapSize) == $imgMapSize ) {
-			if ( $imgMapData !~ /[\x01-\xFF]/ ) {
-			    $addFrame = 0;
-			}
-		    }
-		}
-		close MAP;
-	    }
-	}
-    }
-    if ( $addFrame ) {
-	my $imgDataStart = "ImgData${imgFrameIndex}Start";
-	my $imgDataEnd = "ImgData${imgFrameIndex}End";
-	my $imgPaletteSize = -s $imgPalette;
-	my $imgPaletteCount = $imgPaletteSize >> 5;
-	my $imgPaletteMapSize = $imgPaletteCount > 1 ? -s $imgPaletteMap : 0;
-	my $imgMapSize = 32 * $cinepakWidth/8 * $cinepakHeight/8;
-	my $imgTimeCurrentInt = int($imgTimeCurrent);
-	my $imgDurationInt = int($imgTimeCurrent + $imgDuration) - $imgTimeCurrentInt;
-	my $cinepakForceAtLeastTwoPalettesThisImage = 0;
-	if ( $cinepakForceAtLeastTwoPalettes &&
-	     $imgPaletteCount == 1 ) {
-	    $cinepakForceAtLeastTwoPalettesThisImage = 1;
-	    $imgPaletteCount = 2;
-	    $imgPaletteSize = 2*32;
-	    $imgPaletteMapSize = 4 * int( ( $cinepakWidth/8 * $cinepakHeight/8 + 15 ) / 16 );
-	}
+
+    my $imgDataStart = "ImgData${imgFrameIndex}Start";
+    my $imgDataEnd = "ImgData${imgFrameIndex}End";
+    my $imgTimeCurrentInt = int($imgTimeCurrent);
+    my $imgDurationInt = int($imgTimeCurrent + $imgDuration) - $imgTimeCurrentInt;
+
+    if ( $isEcco32x ) {
 	$cinepakSampleTable .= 
 	    "ImgEntry${imgFrameIndex}:\n".
 	    "\tdc.l\t($imgDataStart-SampleDataStart)\n".
@@ -312,31 +283,95 @@ sub AddImgFrame {
 	    "\tdc.l\t$imgDurationInt\n";
 	$cinepakSampleData .=
 	    "$imgDataStart:\n".
-	    "\tdc.b\t'SM',0x00,0x2".($imgPaletteCount-1)."\n".
-	    "\tdc.l\t".(12+$imgPaletteSize+$imgPaletteMapSize+$imgMapSize)."\n".
-	    "\tdc.w\t".($cinepakWidth/8)."\n".
-	    "\tdc.w\t".($cinepakHeight/8)."\n".
-	    "\tincbin\t$imgPalette\n";
-
-	if ( $cinepakForceAtLeastTwoPalettesThisImage ) {
-	    # zeroed extra palette
-	    $cinepakSampleData .=
-		"\tdc.w\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
-	    # zeroed palette map
-	    $cinepakSampleData .=
-		"\tdc.l\t0".(",0"x($imgPaletteMapSize/4-1))."\n";
-	} elsif ( $imgPaletteCount > 1 ) {
-	    $cinepakSampleData .=
-		"\tincbin\t$imgPaletteMap\n";
-	}
-	$cinepakSampleData .=
 	    "\tincbin\t$imgMap\n".
 	    "$imgDataEnd:\n";
     } else {
-	$cinepakSampleTable .= 
-	    "\t;; image frame skipped\n";
-	$cinepakSampleData .=
-	    "\t;; image frame skipped\n";
+	# only skip frame if not custom and done with audio frames or don't need
+	# image frame right before next audio frame
+	my $addFrame = 1;
+	# in case of single palette or missing palettes, keep using last palette
+	if ( $imgPalette eq '' ) {
+	    $imgPalette = $imgPaletteLast;
+	}
+	if ( $imgPalette eq '' ) {
+	    die "Cannot handle unspecified palette\n";
+	}
+	if ( $optimizeSkipUnchangedFramesIfPossible &&
+	     $customEncodingFile eq '' &&
+	     $imgPaletteLast ne '' &&
+	     ( $pcmFrameIndex >= $pcmFrameCount ||
+	       $imgTimeCurrent + $imgDuration + 1 < $pcmTimeCurrent ) ) {
+	    # ensure palettes are the same
+	    if ( &CompareFiles($imgPalette,$imgPaletteLast) ) {
+		# ensure palette maps are the same
+		if ( ( $imgPaletteMap eq '' &&
+		       $imgPaletteMapLast eq '' ) ||
+		     ( $imgPaletteMap ne '' &&
+		       $imgPaletteMapLast ne '' &&
+		       &CompareFiles($imgPaletteMap,$imgPaletteMapLast) ) ) {
+		    # ensure image map is all zeros
+		    # (zero codebook sizes, method map all zeros)
+		    if ( open( MAP, $imgMap ) ) {
+			my $imgMapSize = -s $imgMap;
+			my $imgMapData = '';
+			if ( read(MAP,$imgMapData,$imgMapSize) == $imgMapSize ) {
+			    if ( $imgMapData !~ /[\x01-\xFF]/ ) {
+				$addFrame = 0;
+			    }
+			}
+		    }
+		    close MAP;
+		}
+	    }
+	}
+	if ( $addFrame ) {
+	    my $imgPaletteSize = -s $imgPalette;
+	    my $imgPaletteCount = $imgPaletteSize >> 5;
+	    my $imgPaletteMapSize = $imgPaletteCount > 1 ? -s $imgPaletteMap : 0;
+	    my $imgMapSize = 32 * $cinepakWidth/8 * $cinepakHeight/8;
+	    my $cinepakForceAtLeastTwoPalettesThisImage = 0;
+	    if ( $cinepakForceAtLeastTwoPalettes &&
+		 $imgPaletteCount == 1 ) {
+		$cinepakForceAtLeastTwoPalettesThisImage = 1;
+		$imgPaletteCount = 2;
+		$imgPaletteSize = 2*32;
+		$imgPaletteMapSize = 4 * int( ( $cinepakWidth/8 * $cinepakHeight/8 + 15 ) / 16 );
+	    }
+	    $cinepakSampleTable .= 
+		"ImgEntry${imgFrameIndex}:\n".
+		"\tdc.l\t($imgDataStart-SampleDataStart)\n".
+		"\tdc.l\t($imgDataEnd-$imgDataStart)\n".
+		"\tdc.l\t$imgTimeCurrentInt\n".
+		# TODO does not correctly indicate value for skipped frames
+		"\tdc.l\t$imgDurationInt\n";
+	    $cinepakSampleData .=
+		"$imgDataStart:\n".
+		"\tdc.b\t'SM',0x00,0x2".($imgPaletteCount-1)."\n".
+		"\tdc.l\t".(12+$imgPaletteSize+$imgPaletteMapSize+$imgMapSize)."\n".
+		"\tdc.w\t".($cinepakWidth/8)."\n".
+		"\tdc.w\t".($cinepakHeight/8)."\n".
+		"\tincbin\t$imgPalette\n";
+
+	    if ( $cinepakForceAtLeastTwoPalettesThisImage ) {
+		# zeroed extra palette
+		$cinepakSampleData .=
+		    "\tdc.w\t0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+		# zeroed palette map
+		$cinepakSampleData .=
+		    "\tdc.l\t0".(",0"x($imgPaletteMapSize/4-1))."\n";
+	    } elsif ( $imgPaletteCount > 1 ) {
+		$cinepakSampleData .=
+		    "\tincbin\t$imgPaletteMap\n";
+	    }
+	    $cinepakSampleData .=
+		"\tincbin\t$imgMap\n".
+		"$imgDataEnd:\n";
+	} else {
+	    $cinepakSampleTable .= 
+		"\t;; image frame skipped\n";
+	    $cinepakSampleData .=
+		"\t;; image frame skipped\n";
+	}
     }
     $imgPaletteLast = $imgPalette;
     $imgPaletteMapLast = $imgPaletteMap;
@@ -410,6 +445,7 @@ scdcinepakencode [options] > <ASMFILE>
                            (defaults to palmap*.bin)
   -cinepaktiledatas=<expr> file expr for cinepak tile data files
                            (defaults to cinepaktiledata*.bin)
+  -ecco32x                 encode as Ecco 32X demo deviation of cinepak
   -custom=<file>           indicates a PERL file to customize the frames
 
 ';

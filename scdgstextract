@@ -962,6 +962,12 @@ foreach my $gstFile (@gstFiles) {
 	&VerbosePrintF("REGSCD68K  SR = %4.4X\n",unpack("n",$regsr));
 	&VerbosePrintF("REGSCD68K USP = %8.8X\n",unpack("N",$regusp));
 	&VerbosePrintF("REGSCD68K SSP = %8.8X\n",unpack("N",$regssp));
+
+	my $pcmfd = &ByteSwapWords(substr($gstData,$gstOffsetSegaCD+0x00140,2));
+	&VerbosePrintF("REGPCM FD for GENS/GS not Fusion ?=? %4.4X\n",unpack("n",$pcmfd));
+
+	my $scdmisc = substr($gstData,$gstOffsetSegaCD+0x00000,0x01000);
+	&VerboseRAM('SCDMISC ',$scdmisc,1,16,1,4);
     }
 
     if ( $extract & EXTRACT_SCDPROGRAMRAM ) {

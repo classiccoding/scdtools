@@ -353,6 +353,12 @@ sub GetColorIndexWithNoAdding {
     return $index;
 }
 
+# TODO bounds checking
+sub SetColor {
+    my ($self,$index,$color) = @_;
+    $self->{'colors'}[$index] = $color;
+}
+
 sub AddColor {
     my ($self,$color) = @_;
     my $index = -1;
