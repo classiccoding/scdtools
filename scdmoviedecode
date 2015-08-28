@@ -150,6 +150,17 @@ my $isoDate = '';
 
 # decode movies
 foreach my $movieFile (@movieFiles) {
+
+    # use movie file based files
+    if ( $movieFile =~ /^(.+)\.[A-Za-z0-9]+$/ ) {
+	my $movieFilePrefix = $1;
+	$pcmFile = $movieFilePrefix.'.pcm';
+	$wavFile = $movieFilePrefix.'.wav';
+    } else {
+	$pcmFile = 'pcm.pcm';
+	$wavFile = 'pcm.wav';
+    }
+
     my $movieFileSize = -s $movieFile;
     if ( $seekCinepak ) {
 	if ( open( MOVIE, $movieFile ) ) {
@@ -449,6 +460,13 @@ sub ReadPCMRaw {
     if ( read(MOVIE,$pcmData,$pcmSize) != $pcmSize ) {
 	print STDERR "not enough characters for a PCM data\n";
 	return 0;
+    }
+
+    my $pcmEnd = index($pcmData,chr(0xFF));
+    if ( $pcmEnd > 0 ) {
+	$pcmData = substr($pcmData,0,$pcmEnd-1);
+    } elsif ( $pcmEnd == 0 ) {
+	$pcmData = '';
     }
 
     &SegaCDPCMToWav(1,-1,$pcmData);
