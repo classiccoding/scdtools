@@ -27,6 +27,7 @@ if ( $#ARGV < 0 ) {
 my $channel = 0;
 my $endPCMChars = 2;
 my $midpointIsPositive = 0;
+my $unsigned = 0;
 my @files;
 
 # parse args
@@ -37,6 +38,8 @@ foreach my $arg (@ARGV) {
 	$endPCMChars = $1;
     } elsif ( $arg =~ /^-midpointispositive$/i ) {
 	$midpointIsPositive = 1;
+    } elsif ( $arg =~ /^-unsigned$/i ) {
+	$unsigned = 1;
     } else {
 	push @files, $arg;
     }
@@ -46,8 +49,8 @@ if ( $#files != 1 ) {
     &Help();
 }
 
-my $waveFile = $ARGV[0];
-my $pcmFile = $ARGV[1];
+my $waveFile = $files[0];
+my $pcmFile = $files[1];
 
 my $waveFileSize = -s $waveFile;
 
@@ -205,25 +208,29 @@ for ( my $i = $channel; $i < $chunkLength; $i += $fmtNumberOfChannels ) {
     my $valueWave = ord(substr($data,$i,1));
     my $value;
     my $amp = 0;
-    if ( $valueWave == 0x80 ) {
-	if ( $midpointIsPositive ) {
-	    $value = 0x00;
-	} else {
-	    $value = 0x80;
-	}
-    } elsif ( $valueWave >= 0x80 ) {
-	$amp = $valueWave - 0x80;
-	$value = 0x00 | $amp;
+    if ( $unsigned ) {
+	$value = $valueWave;
     } else {
-	$amp = 0x80 - $valueWave;
-	$value = 0x80 | $amp;
-    }
-    if ( $amp > $maxAmp ) {
-	$maxAmp = $amp;
-    }
-    if ( $value == 0xFF ) {
-	print STDERR "truncating waveform\n";
-	$value = 0xFE;
+	if ( $valueWave == 0x80 ) {
+	    if ( $midpointIsPositive ) {
+		$value = 0x00;
+	    } else {
+		$value = 0x80;
+	    }
+	} elsif ( $valueWave >= 0x80 ) {
+	    $amp = $valueWave - 0x80;
+	    $value = 0x00 | $amp;
+	} else {
+	    $amp = 0x80 - $valueWave;
+	    $value = 0x80 | $amp;
+	}
+	if ( $amp > $maxAmp ) {
+	    $maxAmp = $amp;
+	}
+	if ( $value == 0xFF ) {
+	    print STDERR "truncating waveform\n";
+	    $value = 0xFE;
+	}
     }
     $pcmData .= chr($value);
 }
@@ -233,9 +240,11 @@ $pcmData .= ( chr(0xFF) x $endPCMChars );
 print PCM $pcmData;
 close PCM;
 
-my $pcmFD = int(0.5+$fmtSampleRate/(12500000/384)*0x800);
-print "Wave sample rate corresponds to a Sega CD PCM FD register value of ".sprintf("0x%4.4X",$pcmFD)."\n";
-print "Wave data had a max 8 bit amplitude of ".$maxAmp." (highest is 127)\n";
+if ( ! $unsigned ) {
+    my $pcmFD = int(0.5+$fmtSampleRate/(12500000/384)*0x800);
+    print "Wave sample rate corresponds to a Sega CD PCM FD register value of ".sprintf("0x%4.4X",$pcmFD)."\n";
+    print "Wave data had a max 8 bit amplitude of ".$maxAmp." (highest is 127)\n";
+}
 
 
 
@@ -251,6 +260,7 @@ scdwav2pcm [options] <wavFile> <pcmFile>
   -endpcmchars=<#>     the number of 0xFF character to append to PCM data
                        (defaults to 2)
   -midpointispositive  use the PCM midpoint as 0x00 (defaults to 0x80)
+  -unsigned            PCM data is unsigned (useful for YM2612 PCM)
 
 [limitations]
   Currently only handles 8-bit PCM wav files.
