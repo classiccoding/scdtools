@@ -1,0 +1,1261 @@
+#!/usr/bin/perl
+###############################################################################
+# Copyright (c) 2016 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+
+# TODO DMF format notes
+# DT is not based on value but that 3 is no detune
+# C-2 in gui stores in dfm as 1 644 but in vgm as octave 2 644
+
+use strict;
+use warnings;
+
+use Encode qw(from_to);
+use Compress::Zlib ;
+use POSIX;
+
+# things specific to the tmnt hyperstone heist
+my $tmnthh = 1;
+
+my $debug = 0;
+
+my $dmfCompress = 1;
+my $fmChannelMask = 0x7F;
+my $psgChannelMask = 0x07;
+my $dmfClock = 60;
+
+my @files;
+
+my $dmfSpeed = 3;
+
+foreach my $arg (@ARGV) {
+    # TODO replace with first option
+    if ( $arg =~ m/^-debug$/i ) {
+	$debug = 1;
+    } elsif ( $arg =~ m/^-dmfspeed=(\d+)$/i ) {
+	$dmfSpeed = $1;
+    } elsif ( $arg =~ /^-fmchmask=([01]{6})$/i ) {
+	my $bin = $1;
+	$fmChannelMask = oct("0b".$bin);
+    } elsif ( $arg =~ /^-psgchmask=([01]{3})$/i ) {
+	my $bin = $1;
+	$psgChannelMask = oct("0b".$bin);
+    } elsif ( $arg =~ /^-pal$/i ) {
+	$dmfClock = 50;
+    } elsif ( -e $arg ) {
+	push @files, $arg;
+    } else {
+	print "Bad argument: $arg\n";
+	&Help();
+    }
+}
+
+foreach my $vgmFile (@files) {
+    my $rc = &ProcessVGM($vgmFile);
+}
+
+sub ProcessVGM {
+    my ($vgmFile) = @_;
+    
+    my $vgmData = '';
+
+    if ( ! open( VGM, '<'.$vgmFile ) ) {
+	print STDERR "Could not open VGM: $vgmFile\n";
+	return 0;
+    }
+    my $vgmLength = -s $vgmFile;
+    binmode VGM;
+    if ( read(VGM,$vgmData,$vgmLength) != $vgmLength ) {
+	print STDERR "Problem reading VGM: $vgmFile\n";
+	return 0;
+    }
+    close VGM;
+
+    # check if has vgm identifier, if not try gunzipping it and if that
+    # has the vgm identifier than copy that over the vgm data
+    # NOTE: this uses gzip format and not raw zlib data
+    my $vgmIdentifer = substr($vgmData,0x00,4);
+    if ( $vgmIdentifer ne 'Vgm ' ) {
+        my $vgmData2 = Compress::Zlib::memGunzip($vgmData);
+	my $vgmLength2 = length($vgmData2);
+	if ( $vgmLength2 >= 4 ) {
+	    my $vgmIdentifer2 = substr($vgmData2,0x00,4);
+	    if ( $vgmIdentifer2 eq 'Vgm ' ) {
+		$vgmData = $vgmData2;
+		$vgmLength = $vgmLength2;
+	    }
+	}
+    }
+
+    my $vgmOffset = 0;
+    my $vgmTrack = 0;
+    do {
+	my $vgmDetail = $vgmFile;
+	if ( $vgmTrack ) {
+	    $vgmDetail .= ':' . $vgmTrack;
+	}
+
+	if ( $vgmLength < 0x24 ) {
+	    print STDERR "File too small to be a valid VGM: $vgmDetail\n";
+	    return 0;
+	}
+
+	my $vgmIdentifer = substr($vgmData,0x00,4);
+	if ( $vgmIdentifer ne 'Vgm ' ) {
+	    print STDERR "Invalid identifier for VGM: $vgmDetail\n";
+	    return 0;
+	}
+
+	# VGM uses little endian
+	my $EofOffset = unpack("V",substr($vgmData,0x04,4));
+	my $vgmTrackLength = $EofOffset + 4;
+	if ( $vgmLength < $vgmTrackLength ) {
+	    print STDERR "File too small based on Eof offset: $vgmDetail\n";
+	    return 0;
+	}
+
+	my $vgmTrack = substr($vgmData,0,$vgmTrackLength);
+	my $rc = &ProcessVGMTrack($vgmDetail,$vgmTrack,$vgmTrackLength);
+	# TODO
+	if ( $rc == 0 ) {
+	    die "Debug\n";
+	}
+
+	$vgmData = substr($vgmData,$vgmTrackLength);
+	$vgmLength -= $vgmTrackLength;
+    } while ($vgmLength > 0);
+
+    return 1;
+}
+
+sub ProcessVGMTrack {
+    my ($vgmDetail,$vgmTrack,$vgmTrackLength) = @_;
+
+    # TODO sample rate 44100
+
+    # version 1.00+
+    my $VersionNumber = unpack("V",substr($vgmTrack,0x08,4));
+    my $SN76489Clock = unpack("V",substr($vgmTrack,0x0C,4));
+    my $YM2413Clock = unpack("V",substr($vgmTrack,0x10,4));
+    my $GD3Offset = unpack("V",substr($vgmTrack,0x14,4));
+    my $GD3Location = $GD3Offset ? 0x14 + $GD3Offset : 0;
+    my $TotalNumberSamples = unpack("V",substr($vgmTrack,0x18,4));
+    my $LoopOffset = unpack("V",substr($vgmTrack,0x1C,4));
+    my $LoopLocation = $LoopOffset ? $LoopOffset + 0x1C : $vgmTrackLength;
+    my $LoopNumberSamples = unpack("V",substr($vgmTrack,0x20,4));
+
+    # version 1.01+
+    my $Rate = 0;
+    if ( $VersionNumber >= 0x00000101 ) {
+	$Rate = unpack("V",substr($vgmTrack,0x24,4));
+    }
+
+    # version 1.10+
+    my $SN76489Feedback = 0x0009;
+    my $SN76489ShiftRegister = 16;
+    if ( $VersionNumber >= 0x00000110 ) {
+	$SN76489Feedback = unpack("v",substr($vgmTrack,0x28,2));
+	$SN76489ShiftRegister = ord(substr($vgmTrack,0x2A,1));
+    }
+
+    # version 1.51+
+    my $SN76489Flags = 0;
+    if ( $VersionNumber >= 0x00000151 ) {
+	$SN76489Flags = ord(substr($vgmTrack,0x2B,1));
+    }
+    
+    # version 1.10+
+    my $YM2612Clock = $YM2413Clock;
+    my $YM2151Clock = $YM2413Clock;
+    if ( $VersionNumber >= 0x00000110 ) {
+	$YM2612Clock = unpack("V",substr($vgmTrack,0x2C,4));
+	$YM2151Clock = unpack("V",substr($vgmTrack,0x30,4));
+    }
+
+    # version 1.50+
+    my $vgmDataOffset = 0x0000000C;
+    if ( $VersionNumber >= 0x00000150 ) {
+	$vgmDataOffset = unpack("V",substr($vgmTrack,0x34,4));
+    }
+
+    # version 1.51+
+    # TODO bytes 0x38...
+
+    my $vgmTrackCurrentOffset = 0x34 + $vgmDataOffset;
+
+    my $dataBlock = '';
+    my $dataBlockSize = 0;
+    my $dataBlockOffset = 0;
+    my @dataBlocks;
+
+    my $samples = 0;
+    my $samplesLoop = 0;
+
+    # TODO assumes VGM data before GD3 data
+
+    my $command = 0x00;
+
+    my @channels;
+    for ( my $channel = 0; $channel < 6; $channel++ ) {
+	$channels[$channel][0]{'effects'} = 1;
+	# FM channels
+	$channels[$channel][0]{'alg'} = 0;
+	$channels[$channel][0]{'fb'} = 0;
+	$channels[$channel][0]{'fms'} = 0;
+	$channels[$channel][0]{'ams'} = 0;
+	for ( my $operator = 0; $operator < 4; $operator++ ) {
+	    $channels[$channel][$operator]{'am'} = 0;
+	    $channels[$channel][$operator]{'ar'} = 0;
+	    $channels[$channel][$operator]{'dr'} = 0;
+	    $channels[$channel][$operator]{'mult'} = 0;
+	    $channels[$channel][$operator]{'rr'} = 0;
+	    $channels[$channel][$operator]{'sl'} = 0;
+	    $channels[$channel][$operator]{'tl'} = 0;
+	    $channels[$channel][$operator]{'dt2'} = 0;
+	    $channels[$channel][$operator]{'rs'} = 0;
+	    $channels[$channel][$operator]{'dt'} = 3;
+	    $channels[$channel][$operator]{'d2r'} = 0;
+	    $channels[$channel][$operator]{'ssgmode'} = 0;
+	    $channels[$channel][$operator]{'freq'} = 0;
+	    $channels[$channel][$operator]{'octave'} = 0;
+	}
+    }
+    for ( my $channel = 0; $channel < 3; $channel++ ) {
+	$channels[6+$channel]{'effects'} = 1;
+	# PSG tone generator channels
+	$channels[6+$channel]{'freq'} = 0;
+	$channels[6+$channel]{'att'} = 0xF;
+    }
+    # noise generator channel
+    $channels[9]{'fb'} = 0;
+    $channels[9]{'nf'} = 0;
+    $channels[9]{'att'} = 0xF;
+
+    my $psgChannelLast = 0;
+
+    my %dmfInstruments;
+    my $dmfInstrumentsCount = 0;
+
+    my @dmfPatternData;
+
+    # swing.vgz
+    my $dmfSamplesPerRow = 44100 * $dmfSpeed / $dmfClock;
+    my $dmfRows = $TotalNumberSamples / $dmfSamplesPerRow;
+
+    # TODO
+    my $dmfRowsPerPattern = $dmfClock;
+
+    if ( $dmfRows < 255 ) {
+	$dmfRowsPerPattern = $dmfRows;
+    }
+    my $dmfRowsInPatternMatrix = floor( ( $dmfRows + $dmfRowsPerPattern - 1 ) / $dmfRowsPerPattern );
+    my $dmfPatternDataLength =  $dmfRowsInPatternMatrix * $dmfRowsPerPattern;
+    for ( my $channel = 0; $channel < 9; $channel++ ) {
+	for ( my $dmfPatternDataIndex = 0; $dmfPatternDataIndex < $dmfPatternDataLength; $dmfPatternDataIndex++ ) {
+	    $dmfPatternData[$channel][$dmfPatternDataIndex]{'note'} = 0x000;
+	    $dmfPatternData[$channel][$dmfPatternDataIndex]{'octave'} = 0x000;
+	    $dmfPatternData[$channel][$dmfPatternDataIndex]{'volume'} = 0xFFFF;
+	    $dmfPatternData[$channel][$dmfPatternDataIndex]{'instrument'} = 0xFFFF;
+	    for ( my $i = 0; $i < 4; $i++ ) {
+		$dmfPatternData[$channel][$dmfPatternDataIndex]{'effectCode'}[$i] = 0xFFFF;
+		$dmfPatternData[$channel][$dmfPatternDataIndex]{'effectValue'}[$i] = 0xFFFF;
+	    }
+	}
+    }
+
+    my %dmfSamples;
+    my $dmfSamplesCount = 0;
+    my $dmfSample = '';
+    my $dmfSampleStart = -1;
+
+    # TODO check for length bounds
+    while ( $command != 0x66 ) {
+	$command = ord(substr($vgmTrack,$vgmTrackCurrentOffset,1));
+	if ( $debug ) {
+	    #printf("command %2.2X (%s)\n",$command,$vgmDetail);
+	}
+	my $commandLength = 1;
+	if ( $command == 0x4F ) {
+	    # TODO
+	    # 0x4F dd    : Game Gear PSG stereo, write dd to port 0x06
+	    my $d = ord(substr($vgmTrack,$vgmTrackCurrentOffset+1,1));
+	    $commandLength = 2;
+	} elsif ( $command == 0x50 ) {
+	    # 0x50 dd    : PSG (SN76489/SN76496) write value dd
+	    my $d = ord(substr($vgmTrack,$vgmTrackCurrentOffset+1,1));
+
+	    #   0   0  d9  d8  d7  d6  d5  d4 tone channel * freq 2nd byte
+	    #   1   0   0   0  d3  d2  d1  d0 tone channel 1 freq
+	    #   1   0   0   1  a3  a2  a1  a0 attenuator channel 1
+	    #   1   0   1   0  d3  d2  d1  d0 tone channel 2 freq 
+	    #   1   0   1   1  a3  a2  a1  a0 attenuator channel 2
+	    #   1   1   0   0  d3  d2  d1  d0 tone channel 3 freq 
+	    #   1   1   0   1  a3  a2  a1  a0 attenuator channel 3
+	    #   1   1   1   0   0  FB NF1 NF0 noise generator control
+	    #   1   1   1   1  a3  a2  a1  a0 attenuator channel noise generator
+
+	    my $channel = ( $d & 0x60 ) >> 5;
+	    if ( ( $d & 0x80 ) == 0 ) {
+		$channel = $psgChannelLast;
+	    }
+
+	    if ( $debug ) {
+		#printf("command %2.2X %2.2X (%s)\n",$command,$d,$vgmDetail);
+	    }
+
+	    if ( $channel == 3 ||
+		 ( ( 1 << ( 2 - $channel ) ) & $psgChannelMask ) ) {
+		my $dmfPatternDataIndex = floor( $samples / $dmfSamplesPerRow );
+
+		if ( $d & 0x80 ) {
+		    if ( $d & 0x10 ) {
+			# attenuator (tone and noise)
+			my $att = ( $d & 0x0F );
+			$channels[6+$channel]{'att'} = $att;
+			if ( $debug ) {
+			    print "PSG channel $channel pattern index $dmfPatternDataIndex att $att\n";
+			}
+			if ( $att == 0xF ) {
+			    if ( $dmfPatternDataIndex > 0 &&
+				 $dmfPatternDataIndex < $dmfPatternDataLength ) {
+				$dmfPatternData[6+$channel][$dmfPatternDataIndex]{'note'} = 100;
+				$dmfPatternData[6+$channel][$dmfPatternDataIndex]{'octave'} = 0;
+				$dmfPatternData[6+$channel][$dmfPatternDataIndex]{'volume'} = 0xFFFF;
+			    }
+			} else {
+			    my $freq = $channels[6+$channel]{'freq'};
+			    if ( $freq &&
+				 $dmfPatternDataIndex < $dmfPatternDataLength ) {
+				my ($dmfOctave,$dmfNote) = &ConvertPSGFreqToDMFOctaveNote($freq);
+				$dmfPatternData[6+$channel][$dmfPatternDataIndex]{'note'} = $dmfNote;
+				$dmfPatternData[6+$channel][$dmfPatternDataIndex]{'octave'} = $dmfOctave;
+				$dmfPatternData[6+$channel][$dmfPatternDataIndex]{'volume'} = 0xF-$att;
+			    }
+			}
+		    } else {
+			if ( $channel < 3 ) {
+			    # tone generator frequency first byte
+			    $channels[6+$channel]{'freq'} = ( $channels[6+$channel]{'freq'} & 0x02F0 ) | ( $d & 0x03 );
+			} else {
+			    # noise generator control
+			    $channels[9]{'fb'} = ( $d & 0x04 ) >> 2;
+			    $channels[9]{'nf'} = ( $d & 0x03 );
+			    # TODO update pattern table?
+			}
+		    }
+		} else {
+		    # tone generator frequency second byte
+		    $channels[6+$channel]{'freq'} = ( $channels[6+$channel]{'freq'} & 0x000F ) | ( ( $d & 0x3F ) << 4 );
+		    my $freq = $channels[6+$channel]{'freq'};
+		    my $att = $channels[6+$channel]{'att'};
+		    if ( $debug ) {
+			#printf("PSG channel $channel freq 0x%4.4X\n",$channels[6+$channel]{'freq'});
+		    }
+		    if ( $freq ) {
+			my ($dmfOctave,$dmfNote) = &ConvertPSGFreqToDMFOctaveNote($freq);
+			if ( $debug ) {
+			    print "PSG channel $channel pattern index $dmfPatternDataIndex freq $freq note $dmfNote octave $dmfOctave\n";
+			}
+			if ( $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			    $dmfPatternData[6+$channel][$dmfPatternDataIndex]{'note'} = $dmfNote;
+			    $dmfPatternData[6+$channel][$dmfPatternDataIndex]{'octave'} = $dmfOctave;
+			    # TODO better way to handle att->volume
+			    # $dmfPatternData[6+$channel][$dmfPatternDataIndex]{'volume'} = 0xF-$att;
+			}
+		    }
+		}
+	    }
+
+	    $psgChannelLast = $channel;
+
+	    $commandLength = 2;
+	} elsif ( $command == 0x52 ||
+	          $command == 0x53 ) {
+	    # TODO
+	    # 0x52 aa dd : YM2612 port 0, write value dd to register aa
+	    # 0x53 aa dd : YM2612 port 1, write value dd to register aa
+	    my $a = ord(substr($vgmTrack,$vgmTrackCurrentOffset+1,1));
+	    my $d = ord(substr($vgmTrack,$vgmTrackCurrentOffset+2,1));
+
+	    if ( $debug ) {
+		printf("command %2.2X %2.2X %2.2X (%s)\n",$command,$a,$d,$vgmDetail);
+	    }
+	    
+	    # + CH1OP1 CH2OP1 CH3OP1 X CH1OP2 ... CH3OP4 X
+	    # * CH1 CH2 CH3 X
+	    # ^ CH3OP2 CH3OP3 CH3OP4 X
+
+	    # 30+ through 90+
+	    my $channel = $a & 0x03;
+	    if ( $command == 0x53 ) {
+		$channel += 3;
+	    }
+	    my $operator = ( $a & 0x0C ) >> 2;
+
+	    if ( $a == 0x22 ) {
+		# TODO
+		# 22 LFO XXXX (LFO EN).1 (LFO FREQ).3
+	    } elsif ( $a == 0x24 ) {
+		# TODO
+		# 24 (TIMER A).8
+	    } elsif ( $a == 0x25 ) {
+		# TODO
+		# 25 XXXXXX TIMER A LSBs
+	    } elsif ( $a == 0x26 ) {
+		# TODO
+		# 26 (TIMER B).8
+	    } elsif ( $a == 0x27 ) {
+		# TODO
+		# 27 (CH3 MODE).2 RESETB RESETA ENABLEB ENABLEA LOADB LOADA
+	    } elsif ( $a == 0x28 ) {
+		# TODO
+		# 28 OP4 OP3 OP2 OP1 X (CHANNEL).3
+		my $dmfPatternDataIndex = floor( $samples / $dmfSamplesPerRow );
+		$channel = ( $d & 0x04 ) ? ( 3 + ( $d & 0x03 ) ) : ( $d & 0x03 );
+		if ( ( 1 << ( 5 - $channel ) ) & $fmChannelMask ) {
+		    # fm channel not masked off
+		    if ( ( $d & 0xF0 ) == 0xF0 ) {
+			# key on
+			if ( $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			    # since effects can change fb, ar, mult, and tl
+			    # these don't affect making a unique instrument for dmf
+			    my $dmfInstrumentUnique =
+				chr($channels[$channel][0]{'alg'}).
+				#chr($channels[$channel][0]{'fb'}).
+				chr($channels[$channel][0]{'fms'}).
+				chr($channels[$channel][0]{'ams'});
+			    my $dmfInstrumentAll =
+				chr($channels[$channel][0]{'alg'}).
+				chr($channels[$channel][0]{'fb'}).
+				chr($channels[$channel][0]{'fms'}).
+				chr($channels[$channel][0]{'ams'});
+			    # my $tlMin = 0x7F;
+			    # for ( my $operator = 0; $operator < 4; $operator++ ) {
+			    # 	if ( $channels[$channel][$operator]{'tl'} < $tlMin ) {
+			    # 	    $tlMin = $channels[$channel][$operator]{'tl'};
+			    # 	}
+			    # }
+			    for ( my $operator = 0; $operator < 4; $operator++ ) {
+				$dmfInstrumentUnique .=
+				    chr($channels[$channel][$operator]{'am'}).
+				    #chr($channels[$channel][$operator]{'ar'}).
+				    chr($channels[$channel][$operator]{'dr'}).
+				    #chr($channels[$channel][$operator]{'mult'}).
+				    chr($channels[$channel][$operator]{'rr'}).
+				    chr($channels[$channel][$operator]{'sl'}).
+				    #chr($channels[$channel][$operator]{'tl'}).
+				    chr($channels[$channel][$operator]{'dt2'}).
+				    chr($channels[$channel][$operator]{'rs'}).
+				    chr($channels[$channel][$operator]{'dt'}).
+				    chr($channels[$channel][$operator]{'d2r'}).
+				    chr($channels[$channel][$operator]{'ssgmode'});
+#				my $tl = 0x7F - floor(0x7F * ( 0x7F - $channels[$channel][$operator]{'tl'} ) / ( 0x7F - $tlMin ) );
+				$dmfInstrumentAll .=
+				    chr($channels[$channel][$operator]{'am'}).
+				    chr($channels[$channel][$operator]{'ar'}).
+				    chr($channels[$channel][$operator]{'dr'}).
+				    chr($channels[$channel][$operator]{'mult'}).
+				    chr($channels[$channel][$operator]{'rr'}).
+				    chr($channels[$channel][$operator]{'sl'}).
+				    chr($channels[$channel][$operator]{'tl'}).
+				    chr($channels[$channel][$operator]{'dt2'}).
+				    chr($channels[$channel][$operator]{'rs'}).
+				    chr($channels[$channel][$operator]{'dt'}).
+				    chr($channels[$channel][$operator]{'d2r'}).
+				    chr($channels[$channel][$operator]{'ssgmode'});
+			    }
+			    my $dmfInstrument = 0;
+			    if ( exists $dmfInstruments{$dmfInstrumentUnique} ) {
+				$dmfInstrument = $dmfInstruments{$dmfInstrumentUnique};
+			    } else {
+				$dmfInstrument = $dmfInstrumentsCount;
+				$dmfInstruments{$dmfInstrumentUnique} = $dmfInstrument;
+				$dmfInstruments{$dmfInstrumentAll} = $dmfInstrument;
+				$dmfInstrumentsCount++;
+			    }
+
+			    if ( ! exists $dmfInstruments{$dmfInstrumentAll} ) {
+				$dmfInstruments{$dmfInstrumentAll} = -1;
+			    }
+
+			    $operator = 0;
+
+			    my $octave = $channels[$channel][$operator]{'octave'};
+			    my $freq = $channels[$channel][$operator]{'freq'};
+			    my ($dmfOctave,$dmfNote) = &ConvertFMOctaveFreqToDMFOctaveNote($octave,$freq);
+			    if ( $debug ) {
+				print "FM channel $channel pattern index $dmfPatternDataIndex octave $octave freq $freq note $dmfNote octave $dmfOctave instrument $dmfInstrument\n";
+			    }
+
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'note'} = $dmfNote;
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'octave'} = $dmfOctave;
+			    # $dmfPatternData[$channel][$dmfPatternDataIndex]{'volume'} = 0x7F-$channels[$channel][3]{'tl'};
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'instrument'} = $dmfInstrument;
+			}
+		    } elsif ( ( $d & 0xF0 ) == 0x00 ) {
+			if ( $dmfPatternDataIndex > 0 &&
+			     $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			    # key off
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'note'} = 100;
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'octave'} = 0;
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'volume'} =  0xFFFF;
+			    $dmfPatternData[$channel][$dmfPatternDataIndex]{'instrument'} = 0xFFFF;
+			}
+		    } else {
+			# partial key on/off
+			print STDERR "Ignoring partial key on/off\n";
+		    }
+		}
+	    } elsif ( $a == 0x2A ) {
+		# 2A (DAC DATA).8
+		$dmfSample .= chr($d);
+	    } elsif ( $a == 0x2B ) {
+		# TODO
+		# 2B (DAC EN).1 XXXXXXX
+		if ( $dmfSample ne '' &&
+		     $dmfSampleStart >= 0 ) {
+		    my $dmfSampleIndex = -1;
+		    if ( exists $dmfSamples{$dmfSample} ) {
+			$dmfSampleIndex = $dmfSamples{$dmfSample}{'index'};
+		    } else {
+			my $dsl = length($dmfSample);
+			my $dmfSampleSamples = $samples - $dmfSampleStart;
+
+			foreach my $dmfSample2 (keys %dmfSamples) {
+			    # ignore samples with ignore flag
+			    # ignore samples that are not close enough in sample length (1/240 of a second for NTSC)
+			    if ( ! exists $dmfSamples{$dmfSample2}{'ignore'} &&
+				 $dmfSampleSamples > ( $dmfSamples{$dmfSample2}{'samples'} - 44100/$dmfClock/4 ) &&
+				 $dmfSampleSamples < ( $dmfSamples{$dmfSample2}{'samples'} + 44100/$dmfClock/4 ) ) {
+				my $dsl2 = length($dmfSample2);
+				if ( $dsl > $dsl2 ) {
+				    # new sample is longer
+				    # this allows cutting off a few samples but resulting in same number of matches
+				    #if ( index($dmfSample2,substr($dmfSample,10,$dsl2-20)) >= 0 ) {
+				    # this assumes PCM data starts the same
+				    # (and differences from getting cut off by other PCM)
+				    if ( substr($dmfSample,0,$dsl2) eq $dmfSample2 ) {
+					$dmfSampleIndex = $dmfSamples{$dmfSample2}{'index'};
+					$dmfSamples{$dmfSample2}{'ignore'} = 1;
+					# all samples should use same reference size
+					$dmfSamples{$dmfSample}{'samples'} = $dmfSamples{$dmfSample2}{'samples'};
+					last;
+				    }
+				} else {
+				    # previous sample is longer
+				    if ( substr($dmfSample2,0,$dsl) eq $dmfSample ) {
+					$dmfSampleIndex = $dmfSamples{$dmfSample2}{'index'};
+					$dmfSamples{$dmfSample}{'ignore'} = 1;
+					# all samples should use same reference size
+					$dmfSamples{$dmfSample}{'samples'} = $dmfSamples{$dmfSample2}{'samples'};
+					last;
+				    }
+				}
+			    }
+			}
+
+			# no similar sample found, create a new sample index
+			if ( $dmfSampleIndex < 0 ) {
+			    $dmfSamples{$dmfSample}{'samples'} = $dmfSampleSamples;
+			    $dmfSampleIndex = $dmfSamplesCount;
+			    $dmfSamplesCount++;
+			}
+
+			$dmfSamples{$dmfSample}{'index'} = $dmfSampleIndex;
+		    }
+
+
+		    if ( $debug ) {
+			my $rate = 44100 / ( $dmfSamples{$dmfSample}{'samples'} / ( length($dmfSample) - 1 ) );
+			print "Sample rate: $rate\n";
+		    }
+
+		    my $dmfPatternDataIndex = floor( $dmfSampleStart / $dmfSamplesPerRow );
+		    if ( $dmfSamplesCount > 12 ) {
+			my $dmfSampleBank = floor( $dmfSampleIndex / 12 );
+			$dmfSampleIndex = $dmfSampleIndex % 12;
+			$channels[5][0]{'effects'} = 2;
+			$dmfPatternData[5][0]{'effectCode'}[1] = 0xEB;
+			$dmfPatternData[5][0]{'effectValue'}[1] = 0x00;
+			$dmfPatternData[5][$dmfPatternDataIndex]{'effectCode'}[1] = 0xEB;
+			$dmfPatternData[5][$dmfPatternDataIndex]{'effectValue'}[1] = $dmfSampleBank;
+		    }
+		    if ( $dmfSampleIndex == 0 ) {
+			$dmfSampleIndex = 12;
+		    }
+		    if ( $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			$dmfPatternData[5][$dmfPatternDataIndex]{'note'} = $dmfSampleIndex;
+			$dmfPatternData[5][$dmfPatternDataIndex]{'octave'} = 4;
+		    }
+		}
+		my $dmfPatternDataIndex = floor( $samples / $dmfSamplesPerRow );
+		if ( $d & 0x80 ) {
+		    # DAC enabled
+#		    if ( $dmfSampleStart < 0 ) {
+			$dmfSample = '';
+			$dmfSampleStart = $samples;
+#		    }
+		    if ( $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			$dmfPatternData[5][$dmfPatternDataIndex]{'effectCode'}[0] = 0x17;
+			$dmfPatternData[5][$dmfPatternDataIndex]{'effectValue'}[0] = 0x01;
+		    }
+		} else {
+		    # DAC disabled
+		    if ( $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			$dmfPatternData[5][$dmfPatternDataIndex]{'effectCode'}[0] = 0x17;
+			$dmfPatternData[5][$dmfPatternDataIndex]{'effectValue'}[0] = 0x00;
+		    }
+		    $dmfSample = '';
+		    $dmfSampleStart = -1;
+		    
+		}
+	    } elsif ( ( $a & 0xF0 ) == 0x30 ) {
+		# 30+ X (DT1).3 (MUL).4
+		my $dt = ( $d & 0x70 ) >> 4;
+		if ( $dt ) {
+		    $dt = $dt - 1;
+		} else {
+		    $dt = 3;
+		}
+		$channels[$channel][$operator]{'dt'} = $dt;
+		$channels[$channel][$operator]{'mult'} = ( $d & 0x0F );
+	    } elsif ( ( $a & 0xF0 ) == 0x40 ) {
+		# 40+ X (TL).7
+		if ( $debug ) {
+		    # printf("command %2.2X %2.2X %2.2X (%s)\n",$command,$a,$d,$vgmDetail);
+		}
+		$channels[$channel][$operator]{'tl'} = ( $d & 0x7F );
+		$channels[$channel][0]{'effects'} = 4;
+		my $dmfPatternDataIndex = floor( $samples / $dmfSamplesPerRow );
+		$dmfPatternData[$channel][$dmfPatternDataIndex]{'effectCode'}[$operator] = 0x12+$operator;
+		$dmfPatternData[$channel][$dmfPatternDataIndex]{'effectValue'}[$operator] = ( $d & 0x7F );
+#		if ( $operator == 3 ) {
+#		    my $dmfPatternDataIndex = floor( $samples / $dmfSamplesPerRow );
+#		    if ( $dmfPatternDataIndex < $dmfPatternDataLength ) {
+#			$dmfPatternData[$channel][$dmfPatternDataIndex]{'volume'} = 0x7F-$channels[$channel][3]{'tl'};
+#		    }
+#		}
+	    } elsif ( ( $a & 0xF0 ) == 0x50 ) {
+		# 50+ (RS).2 X (AR).5
+		$channels[$channel][$operator]{'rs'} = ( $d & 0xC0 ) >> 6;
+		$channels[$channel][$operator]{'ar'} = ( $d & 0x1F );
+	    } elsif ( ( $a & 0xF0 ) == 0x60 ) {
+		# 60+ (AM).1 XX (D1R).5
+		$channels[$channel][$operator]{'am'} = ( $d & 0x80 ) >> 7;
+		$channels[$channel][$operator]{'dr'} = ( $d & 0x1F );
+	    } elsif ( ( $a & 0xF0 ) == 0x70 ) {
+		# 70+ XXX (D2R).5
+		$channels[$channel][$operator]{'d2r'} = ( $d & 0x1F );
+	    } elsif ( ( $a & 0xF0 ) == 0x80 ) {
+		# 80+ (D1L).6 (RR).2
+		$channels[$channel][$operator]{'sl'} = ( $d & 0xF0 ) >> 4;
+		$channels[$channel][$operator]{'rr'} = ( $d & 0x0F );
+	    } elsif ( ( $a & 0xF0 ) == 0x90 ) {
+		# 90+ XXXX (SSG-EG).2
+		$channels[$channel][$operator]{'ssgmode'} = ( $d & 0x0F );
+	    } elsif ( ( $a & 0xFC ) == 0xA0 ) {
+		# A0* (FREQ NUM).8
+		$operator = 0;
+		if ( $debug ) {
+		    # printf("command %2.2X %2.2X %2.2X (%s)\n",$command,$a,$d,$vgmDetail);
+		}
+		$channels[$channel][$operator]{'freq'} = ( $channels[$channel][$operator]{'freq'} & 0xFF00 ) | $d;
+	    } elsif ( ( $a & 0xFC ) == 0xA4 ) {
+		# A4* XX (BLOCK/OCTAVE).3 (FREQ NUM).3
+		$operator = 0;
+		if ( $debug ) {
+		    # printf("command %2.2X %2.2X %2.2X (%s)\n",$command,$a,$d,$vgmDetail);
+		}
+		$channels[$channel][$operator]{'freq'} = ( $channels[$channel][$operator]{'freq'} & 0x00FF ) | ( ( $d & 0x07 ) << 8 );
+		$channels[$channel][$operator]{'octave'} = ( $d & 0x38 ) >> 3;
+	    } elsif ( ( $a & 0xFC ) == 0xA8 ) {
+		# TODO
+		# A8^ (CH3 SUPP FREQ NUM)
+		$operator = $channel;
+		$channel = 3;
+	    } elsif ( ( $a & 0xFC ) == 0xAC ) {
+		# TODO
+		# AC* XX (CH3 SUPP BLOCK) (CH3 SUPP FREQ NUM)
+	    } elsif ( ( $a & 0xFC ) == 0xB0 ) {
+		# B0* XX (FEEDBACK) (ALGORITHM)
+		$channels[$channel][0]{'fb'} = ( $d & 0x38 ) >> 3;
+		$channels[$channel][0]{'alg'} = ( $d & 0x07 );
+	    } elsif ( ( $a & 0xFC ) == 0xB4 ) {
+		# B4* (L).1 (R).1 (AMS).2 X (FMS).3
+		$channels[$channel][0]{'ams'} = ( $d & 0x30 ) >> 4;
+		$channels[$channel][0]{'fms'} = ( $d & 0x07 );
+	    }
+
+	    $commandLength = 3;
+	} elsif ( $command == 0x61 ) {
+	    # TODO
+	    # 0x61 nn nn
+	    # Wait n samples, n can range from 0 to 65535 (approx 1.49
+	    # seconds). Longer pauses than this are represented by multiple
+	    # wait commands.
+	    my $n = unpack("v",substr($vgmTrack,$vgmTrackCurrentOffset+1,2));
+	    $samples += $n;
+	    $samplesLoop += $n if ( $vgmTrackCurrentOffset >= $LoopLocation );
+	    $commandLength = 3;
+	} elsif ( $command == 0x62 ) {
+	    # TODO
+	    # 0x62
+	    # wait 735 samples (60th of a second), a shortcut for
+	    # 0x61 0xdf 0x02
+	    $samples += 735;
+	    $samplesLoop += 735 if ( $vgmTrackCurrentOffset >= $LoopLocation );
+	} elsif ( $command == 0x63 ) {
+	    # TODO
+	    # 0x63
+	    # wait 882 samples (50th of a second), a shortcut for
+	    # 0x61 0x72 0x03
+	    $samples += 882;
+	    $samplesLoop += 882 if ( $vgmTrackCurrentOffset >= $LoopLocation );
+	} elsif ( $command == 0x66 ) {
+	    # 0x66       : end of sound data
+	} elsif ( $command == 0x67 ) {
+	    my $commandCompatibility = ord(substr($vgmTrack,$vgmTrackCurrentOffset+1,1));
+	    if ( $commandCompatibility != 0x66 ) {
+		print STDERR "VGM command did not have 0x66 compatibility command: $vgmDetail\n";
+		return 0;
+	    }
+	    my $dataBlockType = ord(substr($vgmTrack,$vgmTrackCurrentOffset+2,1));
+	    my $dataBlockDataSize = unpack("V",substr($vgmTrack,$vgmTrackCurrentOffset+3,4));
+	    my $dataBlockData = substr($vgmTrack,$vgmTrackCurrentOffset+7,$dataBlockDataSize);
+	    $dataBlock .= $dataBlockData;
+	    $dataBlockSize += $dataBlockDataSize;
+	    # saved for command 0x95
+	    push @dataBlocks, $dataBlockData;
+	    $commandLength = 7 + $dataBlockDataSize;
+	} elsif ( ( $command & 0xF0 ) == 0x70 ) {
+	    # TODO
+	    # 0x7n       : wait n+1 samples, n can range from 0 to 15.
+	    my $n = $command & 0x0F;
+	    $samples += $n+1;
+	    $samplesLoop += $n+1 if ( $vgmTrackCurrentOffset >= $LoopLocation );
+	} elsif ( ( $command & 0xF0 ) == 0x80 ) {
+	    # 0x8n:
+	    # YM2612 port 0 address 2A write from the data bank, then wait 
+	    # n samples; n can range from 0 to 15. Note that the wait is n,
+	    # NOT n+1. (Note: Written to first chip instance only.)
+	    my $n = $command & 0x0F;
+	    $samples += $n;
+	    $samplesLoop += $n if ( $vgmTrackCurrentOffset >= $LoopLocation );
+	    my $s = substr($dataBlock,$dataBlockOffset,1);
+	    $dmfSample .= $s;
+	    if ( $debug ) {
+		#printf("command %2.2X %2.2X (%s)\n",$command,$d,$vgmDetail);
+	    }
+	    $dataBlockOffset++;
+	} elsif ( $command == 0x90 ) {
+	    # TODO
+	    $commandLength = 5;
+	} elsif ( $command == 0x91 ) {
+	    # TODO
+	    $commandLength = 5;
+	} elsif ( $command == 0x92 ) {
+	    # TODO
+	    $commandLength = 6;
+	} elsif ( $command == 0x93 ) {
+	    # TODO
+	    $commandLength = 11;
+	} elsif ( $command == 0x94 ) {
+	    # TODO
+	    $commandLength = 2;
+	} elsif ( $command == 0x95 ) {
+	    # TODO
+	    $commandLength = 5;
+	} elsif ( $command == 0xE0 ) {
+	    my $dataBlockSeek = unpack("V",substr($vgmTrack,$vgmTrackCurrentOffset+1,4));
+	    $dataBlockOffset = $dataBlockSeek;
+	    $commandLength = 5;
+	} else {
+	    print STDERR sprintf("Unsupported command %2.2X (%s)\n",$command,$vgmDetail);
+	    return 0;
+	}
+	$vgmTrackCurrentOffset += $commandLength;
+    }
+
+    if ( $TotalNumberSamples != $samples ) {
+	print STDERR "Error determining total number samples ($TotalNumberSamples vs $samples)\n";
+    }
+
+    if ( $LoopOffset && $LoopNumberSamples != $samplesLoop ) {
+	print STDERR "Error determining loop number samples ($LoopNumberSamples vs $samplesLoop)\n";
+    }
+
+    my $dmfInstrumentsTotal = keys %dmfInstruments;
+    $dmfInstrumentsTotal -= $dmfInstrumentsCount;
+    print "DMF Instruments Unique: $dmfInstrumentsCount\n";
+    if ( $debug ) {
+	print "DMF Instruments Total: $dmfInstrumentsTotal\n";
+    }
+
+    my @GD3Strings;
+    if ( $GD3Offset ) {
+	if ( $vgmTrackCurrentOffset > $GD3Location ) {
+	    print STDERR "GD3 offset points into vgm data\n";
+	    return 0;
+	} elsif ( $vgmTrackCurrentOffset < $GD3Location ) {
+	    print STDERR "Data being skipped between vgm data and GD3 data\n";
+	    $vgmTrackCurrentOffset = $GD3Location;
+	}
+
+	my $GD3Tag = substr($vgmTrack,$vgmTrackCurrentOffset,4);
+	if ( $GD3Tag ne 'Gd3 ' ) {
+	    print STDERR "GD3 does not have valid GD3 identifier\n";
+	} else {
+	    # GD3 uses little endian
+	    # 0x00000100
+	    my $GD3Version = unpack("V",substr($vgmTrack,$vgmTrackCurrentOffset+4,4));
+	    if ( $GD3Version < 0x00000100 ) {
+		print STDERR "GD3 version prior to v1.00\n";
+	    } else {
+		my $GD3Length = unpack("V",substr($vgmTrack,$vgmTrackCurrentOffset+8,4));
+		# 11 strings
+		my $GD3Offset = 0;
+		my $GD3String = '';
+		my $GD3StringTerminator = chr(0x00).chr(0x00);
+		while ($GD3Offset < $GD3Length) {
+		    my $GD3Char = substr($vgmTrack,$vgmTrackCurrentOffset+12+$GD3Offset,2);
+		    if ( $GD3Char eq $GD3StringTerminator ) {
+			from_to($GD3String, 'UTF-16le', 'UTF-8');
+			push @GD3Strings, $GD3String;
+			$GD3String = '';
+		    } else {
+			$GD3String .= $GD3Char;
+		    }
+		    $GD3Offset += 2;
+		}
+
+		# print out utf-8 of strings
+		if ( $debug && 0 ) {
+		    my $i = 0;
+		    foreach my $GD3StringDebug (@GD3Strings) {
+			my $x = length($GD3StringDebug);
+			print "$i: ";
+			for ( my $j = 0; $j < $x; $j += 2 ) {
+			    print substr($GD3StringDebug,$j,1);
+			}
+			print "\n";
+			$i++;
+		    }
+		}
+
+		if ( $GD3String ne '' ) {
+		    print "GD3 strings found: ".$#GD3Strings."\n";
+		    print STDERR "GD3 length ends in middle of a string: $vgmDetail\n";
+		    @GD3Strings = ();
+		}
+		if ( $#GD3Strings >= 0 && $#GD3Strings < 10 ) {
+		    print "GD3 strings found: ".$#GD3Strings."\n";
+		    print STDERR "Not enough strings in GD3: $vgmDetail\n";
+		    @GD3Strings = ();
+		}
+
+		# seeing VGM rips with 12 string instead of 11...
+		# so checking for more than 12 instead of 11 as planned
+		if ( $#GD3Strings > 11 && $GD3Version == 0x00000100 ) {
+		    print "GD3 strings found: ".$#GD3Strings."\n";
+		    print STDERR "Too many strings for GD3 v1.00: $vgmDetail\n";
+		}
+		$vgmTrackCurrentOffset += 12 + $GD3Length;
+	    }
+	}
+    }
+
+    if ( $vgmTrackCurrentOffset != $vgmTrackLength ) {
+	print STDERR "Unused data in VGM track: $vgmDetail\n";
+    }
+
+    ###########################################################################
+    # DMF
+    ###########################################################################
+
+    my $dmfData = '';
+    my $dmfChannels = 10;
+
+    # START OF DMF FORMAT
+
+    # FORMAT FLAGS
+    # Format String
+    $dmfData .= '.DelekDefleMask.';
+    # File Version
+    # DefleMask v0.12.0
+    $dmfData .= chr(0x18);
+	
+    # SYSTEM SET
+    # SYSTEM_GENESIS (0x2)
+    $dmfData .= chr(0x02);
+
+    # VISUAL INFORMATION
+    my $songName = '';
+    my $songAuthor = '';
+    if ( $#GD3Strings >= 10 ) {
+	if ( $GD3Strings[0] ne '' ) {
+	    if ( $GD3Strings[2] ne '' ) {
+		$songName .= $GD3Strings[2] . ' : ';
+	    }
+	    $songName .= $GD3Strings[0];
+	}
+	if ( $GD3Strings[6] ne '' ) {
+	    $songAuthor .= $GD3Strings[6];
+	}
+    }
+    my $songNameLength = length($songName);
+    if ( $songNameLength > 255 ) {
+	$songName = substr($songName,0,255);
+	$songNameLength = 255;
+    }
+    my $songAuthorLength = length($songAuthor);
+    if ( $songAuthorLength > 255 ) {
+	$songAuthor = substr($songAuthor,0,255);
+	$songAuthorLength = 255;
+    }
+    # Song Name Chars Count
+    $dmfData .= chr($songNameLength);
+    # Song Name Chars
+    $dmfData .= $songName;
+    # Song Author Chars Count
+    $dmfData .= chr($songAuthorLength);
+    # Song Author Chars
+    $dmfData .= $songAuthor;
+    # Highlight A in patterns
+    $dmfData .= chr(0x08);
+    # Highlight B in patterns
+    $dmfData .= chr(0x10);
+
+    # MODULE INFORMATION
+    # Tick Base
+    $dmfData .= chr(0x00);
+    # Tick Time 1
+    $dmfData .= chr($dmfSpeed);
+    # Tick Time 2
+    $dmfData .= chr($dmfSpeed);
+    # Frames Mode (0 = PAL, 1 = NTSC)
+    if ( $dmfClock == 50 ) {
+	$dmfData .= chr(0x00);
+    } else {
+	$dmfData .= chr(0x01);
+    }
+    # Using Custom Hz
+    $dmfData .= chr(0x00);
+    # Custom HZ value 1
+    $dmfData .= chr(0x00);
+    # Custom HZ value 2
+    $dmfData .= chr(0x00);
+    # Custom HZ value 3
+    $dmfData .= chr(0x00);
+    # TOTAL_ROWS_PER_PATTERN
+    # DMF uses little endian
+    $dmfData .= pack("V",$dmfRowsPerPattern);
+    # TOTAL_ROWS_IN_PATTERN_MATRIX
+    $dmfData .= chr($dmfRowsInPatternMatrix);
+
+    # PATTERN MATRIX VALUES
+    for ( my $channel = 0; $channel < $dmfChannels; $channel++ ) {
+	for ( my $dmfPatternIndex = 0; $dmfPatternIndex < $dmfRowsInPatternMatrix; $dmfPatternIndex++ ) {
+	    $dmfData .= chr($dmfPatternIndex);
+	}
+    }
+
+    # INSTRUMENTS DATA
+    # TOTAL_INSTRUMENTS
+    $dmfData .= chr($dmfInstrumentsCount);
+    my $dmfInstrumentsCountVerify = 0;
+    foreach my $dmfInstrument (sort { $dmfInstruments{$a} <=> $dmfInstruments{$b} } keys %dmfInstruments) {
+	my $dmfInstrumentsIndex = $dmfInstruments{$dmfInstrument};
+	next if $dmfInstruments{$dmfInstrument} < 0;
+	# 52 bytes, unique strings will have less bytes
+	next if ( length($dmfInstrument) != 52 );
+	my $instrumentName = 'Instrument'.$dmfInstrumentsIndex;
+	# Instruement Name Chars Count
+	$dmfData .= chr(length($instrumentName));
+	# Instrument Name
+	$dmfData .= $instrumentName;
+	# Instrument Made
+	$dmfData .= chr(0x01);
+	# INSTRUEMENT MODE IS FM
+	$dmfData .= $dmfInstrument;
+	$dmfInstrumentsCountVerify++;
+    }
+
+    if ( $dmfInstrumentsCount != $dmfInstrumentsCountVerify ) {
+	print STDERR "Error in dmf instruments: $dmfInstrumentsCount vs $dmfInstrumentsCountVerify\n";
+    }
+
+    # WAVETABLES DATA
+    # TOTAL_WAVETABLES
+    $dmfData .= chr(0x00);
+
+    if ( $debug ) {
+	#printf("pattern data starts at %4.4X\n",length($dmfData));
+    }
+
+    # PATTERNS DATA
+    # repeat SYSTEM_TOTAL_CHANNELS
+    for ( my $channel = 0; $channel < $dmfChannels; $channel++ ) {
+	# CHANNEL_EFFECTS_COLUMNS_COUNT
+	my $channelEffects = 1;
+	if ( $channel < 6 ) {
+	    $channelEffects = $channels[$channel][0]{'effects'};
+	} elsif ( $channel >= 6 && $channel < 9 ) {
+	    $channelEffects = $channels[$channel]{'effects'};
+	}
+	$dmfData .= chr($channelEffects);
+	# repeat TOTAL_ROWS_IN_PATTERN_MATRIX
+	for ( my $rowPattern = 0; $rowPattern < $dmfRowsInPatternMatrix; $rowPattern++ ) {
+	    # repeat TOTAL_ROWS_PER_PATTERN
+	    for ( my $row = 0; $row < $dmfRowsPerPattern; $row++ ) {
+		my $dmfPatternDataIndex = $rowPattern * $dmfRowsPerPattern + $row;
+		my $note = 0x0000;
+		my $octave = 0x0000;
+		my $volume = 0xFFFF;
+		my $instrument = 0xFFFF;
+
+		if ( $channel < 9 &&
+		     $dmfPatternDataIndex < $dmfPatternDataLength ) {
+		    $note = $dmfPatternData[$channel][$dmfPatternDataIndex]{'note'};
+		    $octave = $dmfPatternData[$channel][$dmfPatternDataIndex]{'octave'};
+		    $volume = $dmfPatternData[$channel][$dmfPatternDataIndex]{'volume'};
+		    $instrument = $dmfPatternData[$channel][$dmfPatternDataIndex]{'instrument'};
+		}
+		# Note
+		$dmfData .= pack("v",$note);
+		# Octave
+		$dmfData .= pack("v",$octave);
+		# Volume
+		$dmfData .= pack("v",$volume);
+		# repeat CHANNEL_EFFECTS_COLUMNS_COUNT
+		for ( my $effectIndex = 0; $effectIndex < $channelEffects; $effectIndex++ ) {
+		    my $effectCode = 0xFFFF;
+		    my $effectValue = 0xFFFF;
+		    if ( $channel < 9 &&
+			 $dmfPatternDataIndex < $dmfPatternDataLength ) {
+			$effectCode = $dmfPatternData[$channel][$dmfPatternDataIndex]{'effectCode'}[$effectIndex];
+			$effectValue = $dmfPatternData[$channel][$dmfPatternDataIndex]{'effectValue'}[$effectIndex];
+		    }
+		    # Effect Code
+		    $dmfData .= pack("v",$effectCode);
+		    # Effect Value
+		    $dmfData .= pack("v",$effectValue);
+		}
+		# Instrument
+		$dmfData .= pack("v",$instrument);
+	    }
+	}
+    }
+
+    # PCM SAMPLES DATA
+    # TOTAL_SAMPLES
+    $dmfData .= chr($dmfSamplesCount);
+    my $dmfSamplesCountVerify = 0;
+    # repeat TOTAL_SAMPLES
+    foreach my $dmfSample (sort { $dmfSamples{$a}{'index'} <=> $dmfSamples{$b}{'index'} } keys %dmfSamples) {
+	next if exists $dmfSamples{$dmfSample}{'ignore'};
+#	my $SampleSize = length($dmfSample);
+	my $SampleSize = (length($dmfSample)+1)>>1;
+	# SAMPLE_SIZE
+	$dmfData .= pack("V",$SampleSize);
+	# Sample Name Chars Count
+	my $dmfSampleName = 'Sample'.$dmfSamples{$dmfSample}{'index'};
+	$dmfData .= chr(length($dmfSampleName));
+	# Sample Name Chars
+	$dmfData .= $dmfSampleName;
+	# Sample Rate #2:11025
+	# 1:8000, 2:11025, 3:16000, 4:22050, 5:32000
+	$dmfData .= chr(2);
+	# Sample Pitch -5 to 5, 5 is zero pitch
+	$dmfData .= chr(5);
+	# Sample Amp -100 to 100 in increments of 2, 50 is zero amp
+	$dmfData .= chr(50);
+	# Sample Bits (8 or 16)
+	$dmfData .= chr(8);
+	# repeat SAMPLE_SIZE
+#	my $c = chr(0x00);
+#	for ( my $i = 0; $i < $SampleSize; $i++ ) {
+#	    $dmfData .= substr($dmfSample,$i,1).$c;
+#	}
+	$dmfData .= $dmfSample;
+	if ( length($dmfSample) & 1 ) {
+	    $dmfData .= chr(0x00);
+	}
+	$dmfSamplesCountVerify++;
+    }
+    if ( $dmfSamplesCount != $dmfSamplesCountVerify ) {
+	print STDERR "Error in dmf samples: $dmfSamplesCount vs $dmfSamplesCountVerify\n";
+    }
+
+    print "DMF Samples: $dmfSamplesCount\n";
+
+    # is this an extra byte or an even byte?
+    if ( length($dmfData) & 1 ) {
+	$dmfData .= chr(0x00);
+    }
+
+    # END OF DMF FORMAT
+
+    if ( $debug ) {
+	open(DMF, '>a.dmf.decompressed');
+	binmode DMF;
+	print DMF $dmfData;
+	close DMF;
+    }
+
+    if ( $dmfCompress ) {
+	# NOTE: this uses raw zlib data and not gzip format
+	$dmfData = Compress::Zlib::compress($dmfData);
+
+	open(DMF, '>a.dmf');
+	binmode DMF;
+	print DMF $dmfData;
+	close DMF;
+    }
+
+    if ( $debug ) {
+	# 12 byte cols makes pattern debugging easier
+	system("xxd -cols 12 a.dmf.decompressed > a.xxd");
+    }
+    
+    return 1;
+}
+
+
+
+sub ConvertWaveFreqToDMFOctaveNote {
+    my ($freqWave) = @_;
+    # note is freqWave = 440 * 2 ** ( octave + note / 12 )
+    # to get note offset, noteOffset = log(freqWave/440)/log(2)*12
+    # round to nearest whole note offset, so offset by .5
+    my $noteOffsetFrom440Hz = floor(log($freqWave/440.0)/log(2.0)*12+0.5);
+    # 440 is A-2, so 2 * 12 + 9
+    my $dmfOctaveNote = ( 2 * 12 + 9 ) + $noteOffsetFrom440Hz;
+    my $dmfOctave = floor($dmfOctaveNote / 12);
+    my $dmfNote = ( $dmfOctaveNote % 12 );
+    if ( $dmfNote < 1 ) {
+	$dmfNote += 12;
+	$dmfOctave -= 1;
+    }
+    if ( $dmfOctave < 0 ) {
+	$dmfOctave = 0;
+    }
+    if ( $dmfOctave > 7 ) {
+	$dmfOctave = 7;
+    }
+    return ($dmfOctave,$dmfNote);
+}
+
+sub ConvertPSGFreqToDMFOctaveNote {
+    my ($freqPSG) = @_;
+    my $freqWave = 3579545.0 / ( 2 * 16 * $freqPSG );
+    return &ConvertWaveFreqToDMFOctaveNote($freqWave);
+}
+
+sub ConvertFMOctaveFreqToDMFOctaveNote {
+    #return &ConvertFMOctaveFreqToDMFOctaveNote_Old(@_);
+
+    my ($octave,$freq) = @_;
+    # A-2 is 440 and freq 1081 octave 2
+    # but this calculation perfectly lines up with 432 Hz and not 440 Hz
+    my $freqWave = $freq * ( 2 ** $octave ) * 0.1;
+    return &ConvertWaveFreqToDMFOctaveNote($freqWave);
+}
+
+
+# frequencies
+# sega software manual:  617 653 692 733 777 823 782 924 979 1037 1099 1164
+# hex comparison
+# sega    sonic.dfm  echo
+#     b   4BF        4BE
+# 48C a#  47B        47A
+# 44B a   43B        439
+#     g#  3FE        3FD
+# 3D3 g   3C5        3C4
+#     f#  38E        38E
+# 368 f   35B        35A
+# 337 e   32B        32A
+# 309 d#  2FE        2FD
+# 2DD d   2D3        2D2
+# 2B4 c#  2AA        2A9
+# 28D c   284        284
+# 269 b
+#
+# dmf displays C-2 but stores dmf C-1 and vgm results in 2 0x284 C 
+# dmf displays C#-2 and stores dmf C#-2 and vgm results in 2 6
+sub ConvertFMOctaveFreqToDMFOctaveNote_Old {
+    # TODO update better using ConvertWaveFreqToDMFOctaveNote
+    my ($octave,$freq) = @_;
+    # using echo frequencies as basis
+    # use halfway point between notes to allow range for notes
+    # (607) b
+    # 644, 681, 722, 765
+    # 810, 858, 910, 964
+    # 1021, 1081, 1146, 1214
+    # (1288) c
+    # (1362) c#
+    if ( $freq < 662.5 ) {
+	if ( $octave > 0 ) {
+	    return &ConvertFMOctaveFreqToDMFOctaveNote_Old($octave-1,$freq<<1);
+	} else {
+	    # wrap at lowest note
+	    return (0,1);
+	}
+    } elsif ( $freq > 1325 ) {
+	if ( $octave < 7 ) {
+	    return &ConvertFMOctaveFreqToDMFOctaveNote_Old($octave+1,$freq>>1);
+	}
+    } elsif ( $freq > 1251 ) {
+	return ($octave,12);
+    } elsif ( $freq > 1180 ) {
+	return ($octave,11);
+    } elsif ( $freq > 1113.5 ) {
+	return ($octave,10);
+    } elsif ( $freq > 1051 ) {
+	return ($octave,9);
+    } elsif ( $freq > 992.5 ) {
+	return ($octave,8);
+    } elsif ( $freq > 937 ) {
+	return ($octave,7);
+    } elsif ( $freq > 884 ) {
+	return ($octave,6);
+    } elsif ( $freq > 834 ) {
+	return ($octave,5);
+    } elsif ( $freq > 787.5 ) {
+	return ($octave,4);
+    } elsif ( $freq > 743.5 ) {
+	return ($octave,3);
+    } elsif ( $freq > 701.5 ) {
+	return ($octave,2);
+    } else {
+	return ($octave,1);
+    }
+    return (0,0);
+}
+
+sub Help {
+    # TODO update
+    die '
+scdvgmconvert [options]
+
+[description]
+  Convert vgm format.
+
+[options]
+  -make                     generate a default SCDMAKE.CFG file
+
+';
+}
