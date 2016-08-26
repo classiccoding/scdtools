@@ -38,6 +38,7 @@ my $bin = 0;
 my $offset = 0;
 my $length = 0;
 my $end = 0;
+my $repeat = 1;
 
 sub ArgNumber {
     my ($type,$num) = @_;
@@ -85,6 +86,11 @@ foreach my $arg (@ARGV) {
 	$directiveCount = $1;
     } elsif ( $arg =~ m/^-(directive)?linebreak=(.+)$/i ) {
 	$directiveLineBreak = $2;
+    } elsif ( $arg =~ /^-repeat=(\d+)$/i ) {
+	$repeat = $1;
+	if ( $repeat < 1 ) {
+	    &Help();
+	}
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
 	$verbosity = $1;
     } else {
@@ -240,13 +246,13 @@ if ( $binFile ne $binFileIn ) {
 }
 
 if ( $asmFile eq '' || $asmFile eq '-' ) {
-    print $asmData;
+    print $asmData x $repeat;
 } else {
     if ( open( ASM, '>'.$asmFile ) ) {
 	if ( $bin ) {
 	    binmode ASM;
 	}
-	print ASM $asmData;
+	print ASM $asmData x $repeat;
     }
     close ASM;
 }
@@ -294,6 +300,7 @@ scdbin2asmdata [options] <inputfile> [outputfile]
   -paloffset=<#>      pal (32 byte) offset in keyword file
   -pallength=<#>      pal (32 byte) length of keyword
   -palend=<#>         pal (32 byte) end of keyword
+  -repeat=<#>         repeat a desired amount of times (default 1)
 
 ';
 }
