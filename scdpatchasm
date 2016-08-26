@@ -78,12 +78,17 @@ while ( $patchAsmFooter != 0 ) {
 		die "Invalid PATCHASM next address\n";
 	    }
 	    my $patchAsmTargetAddress = unpack("N",substr($romFile1Data,$patchAsmAddress+4,4));
-	    if ( $patchAsmTargetAddress + $patchAsmTargetLength > $patchAsmInitialize ) {
-		die "Invalid PATCHASM target address\n";
+	    if ( $patchAsmTargetAddress != 0 ) {
+		# regular entry
+		if ( $patchAsmTargetAddress + $patchAsmTargetLength > $patchAsmInitialize ) {
+		    die "Invalid PATCHASM target address\n";
+		}
+		my $patchAsmTargetData = substr($romFile1Data,$patchAsmAddress+8,$patchAsmTargetLength);
+		substr($romFile1Data,$patchAsmTargetAddress,$patchAsmTargetLength) = $patchAsmTargetData;
+		$patchAsmAddress = $patchAsmAddressNext;
+	    } else {
+		die "Advanced format not architected or implemented\n";
 	    }
-	    my $patchAsmTargetData = substr($romFile1Data,$patchAsmAddress+8,$patchAsmTargetLength);
-	    substr($romFile1Data,$patchAsmTargetAddress,$patchAsmTargetLength) = $patchAsmTargetData;
-	    $patchAsmAddress = $patchAsmAddressNext;
 	}
     }
 
