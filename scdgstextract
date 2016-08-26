@@ -178,6 +178,7 @@ use constant EXTRACT_GEN68KREG     => 0x00000001;
 use constant EXTRACT_GEN68KRAM     => 0x00000002;
 use constant EXTRACT_GENZ80REG     => 0x00000010;
 use constant EXTRACT_GENZ80RAM     => 0x00000020;
+use constant EXTRACT_GENYM         => 0x00000040;
 use constant EXTRACT_GENVDPREG     => 0x00000100;
 use constant EXTRACT_GENVDPCRAM    => 0x00000200;
 use constant EXTRACT_GENVDPVSRAM   => 0x00000400;
@@ -187,14 +188,14 @@ use constant EXTRACT_SCDPROGRAMRAM => 0x00002000;
 use constant EXTRACT_SCDWORDRAM    => 0x00004000;
 use constant EXTRACT_SCDPCMRAM     => 0x00008000;
 # combinations of extractions
-use constant EXTRACT_NONE       => 0x00000000;
-use constant EXTRACT_ALL        => 0xFFFFFFFF;
-use constant EXTRACT_GEN        => 0x00000FFF;
-use constant EXTRACT_SCD        => 0x000FF000;
-use constant EXTRACT_32X        => 0x0FF00000;
-use constant EXTRACT_GEN68K     => 0x0000000F;
-use constant EXTRACT_GENZ80     => 0x000000F0;
-use constant EXTRACT_GENVDP     => 0x00000F00;
+use constant EXTRACT_NONE          => 0x00000000;
+use constant EXTRACT_ALL           => 0xFFFFFFFF;
+use constant EXTRACT_GEN           => 0x00000FFF;
+use constant EXTRACT_SCD           => 0x000FF000;
+use constant EXTRACT_32X           => 0x0FF00000;
+use constant EXTRACT_GEN68K        => 0x0000000F;
+use constant EXTRACT_GENZ80        => 0x00000030;
+use constant EXTRACT_GENVDP        => 0x00000F00;
 
 use constant VDP_USAGE_NONE              => 0x00000000;
 use constant VDP_USAGE_TILE_SCROLL_A     => 0x00000001;
@@ -212,6 +213,7 @@ my $verbosefiles = 0;
 my $verboseText = '';
 my $extractSpecified = EXTRACT_NONE;
 my $ramfiles = 0;
+my $palMask = 0xF;
 my $png = 0;
 my $pngcrush = 0;
 my $composite = 0;
@@ -237,8 +239,10 @@ foreach my $arg (@ARGV) {
 	$extractSpecified |= EXTRACT_32X;
     } elsif ( $arg =~ /^-(gen)?68k$/i ) {
 	$extractSpecified |= EXTRACT_GEN68K;
-    } elsif ( $arg =~ /^-(gen?)z80$/i ) {
+    } elsif ( $arg =~ /^-(gen)?z80$/i ) {
 	$extractSpecified |= EXTRACT_GENZ80;
+    } elsif ( $arg =~ /^-(gen)?ym((26)?12)?$/i ) {
+	$extractSpecified |= EXTRACT_GENYM;
     } elsif ( $arg =~ /^-(gen)?vdp$/i ) {
 	$extractSpecified |= EXTRACT_GENVDP;
     } elsif ( $arg =~ /^-(gen)?68kreg$/i ) {
@@ -259,6 +263,10 @@ foreach my $arg (@ARGV) {
 	$extractSpecified |= EXTRACT_GENVDPVRAM;
     } elsif ( $arg =~ /^-ramfiles?$/i ) {
 	$ramfiles = 1;
+    } elsif ( $arg =~ /^-palmask=(\d+)$/i ) {
+	$palMask = $1;
+    } elsif ( $arg =~ /^-palmask=((0x)?[0-F])$/i ) {
+	$palMask = hex($1);
     } elsif ( $arg =~ /^-png$/i ) {
 	$png = 1;
 	$extractSpecified |= EXTRACT_GENVDP;
@@ -435,6 +443,42 @@ foreach my $gstFile (@gstFiles) {
 	    close RAMZ80;
 	}
 	&VerboseRAM('RAMZ80 ',$ramz80,1,16,1,4);
+    }
+
+    my $ymData = substr($gstData,0x001E4,0x200);
+
+    if ( $extract & EXTRACT_GENYM ) {
+	&VerboseRAM('YM2612 ',$ymData,1,16,1,4);
+
+	for ( my $channel = 0; $channel < 6; $channel++ ) {
+	    my $channelMod3 = $channel % 3;
+	    my $channelDiv3 = $channel < 3 ? 0 : 1;
+	    my $ymPage = 0x100 * $channelDiv3;
+	    my $y12Data = '';
+	    for ( my $op = 0; $op < 4; $op++ ) {
+		for ( my $i = 0x30+$channelMod3+4*$op; $i < 0xA0; $i += 0x10 ) {
+		    $y12Data .= substr($ymData,$ymPage+$i,1);
+		}
+		$y12Data .= chr(0x00) x 9;
+	    }
+	    my $fbalgo = ord(substr($ymData,$ymPage+0xB0+$channelMod3));
+	    my $fb   = ( $fbalgo >> 3 ) & 0x07;
+	    my $algo = ( $fbalgo      ) & 0x07;
+	    $y12Data .= chr($algo);
+	    $y12Data .= chr($fb);
+	    $y12Data .= chr(0x00) x 14;
+	    # NAME
+	    $y12Data .= ( chr(0x00) x 16 );
+	    # DUMPER
+	    $y12Data .= 'SCDGSTEXTRACT' . 'CH' . chr(ord('1')+$channel);
+	    # GAME
+	    $y12Data .= ( chr(0x00) x 16 );
+
+	    open(Y12, ">${outPrefix}ym_ch".($channel+1).".y12");
+	    binmode Y12;
+	    print Y12 $y12Data;
+	    close Y12;
+	}
     }
 
     # swap bytes to convert from little endian to big endian
@@ -632,23 +676,25 @@ foreach my $gstFile (@gstFiles) {
 	if ( $png ) {
 	    # TODO does not remove window part of scroll A
 
-	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrolla_low.png");
-	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrolla_high.png");
+	    system("scdtile2img -palmask=$palMask -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrolla_low.png");
+	    system("scdtile2img -palmask=$palMask -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollA -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrolla_high.png");
 
 	    # TODO does not remove unused part of window
 	    if ( $windowEnabled ) {
-		system("scdtile2img -width=$widthShown -height=$heightShown -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=low  -imgfile=${outPrefix}window_low.png");
-		system("scdtile2img -width=$widthShown -height=$heightShown -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=high  -imgfile=${outPrefix}window_high.png");
+		system("scdtile2img -palmask=$palMask -width=$widthShown -height=$heightShown -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=low  -imgfile=${outPrefix}window_low.png");
+		system("scdtile2img -palmask=$palMask -width=$widthShown -height=$heightShown -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$window -mapwidth=2 $pngcrushOption -priority=high  -imgfile=${outPrefix}window_high.png");
 	    }
 
-	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrollb_low.png");
-	    system("scdtile2img -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrollb_high.png");
+	    system("scdtile2img -palmask=$palMask -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=low -imgfile=${outPrefix}scrollb_low.png");
+	    system("scdtile2img -palmask=$palMask -width=$widthPlane -height=$heightPlane -palfile=${outPrefix}cram.bin -palcount=4 -tilesfile=${outPrefix}vram.bin -mapfile=${outPrefix}vram.bin -mapbyteoffset=$scrollB -mapwidth=2 $pngcrushOption -priority=high -imgfile=${outPrefix}scrollb_high.png");
 
 	    # makes 512x256 picture
 	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal0.png");
 	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -paloffset=1 -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal1.png");
 	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -paloffset=2 -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal2.png");
 	    system("scdtile2img -width=512 -palfile=${outPrefix}cram.bin -paloffset=3 -palcount=1 -plane -tilesfile=${outPrefix}vram.bin $pngcrushOption -imgfile=${outPrefix}tilespal3.png");
+
+	    system("scdtile2img -palfile=${outPrefix}cram.bin -palcount=4 -palmap -imgfile=${outPrefix}_pal.png");
 	}
 
 	if ( $verbose ) {
@@ -790,6 +836,7 @@ foreach my $gstFile (@gstFiles) {
 	    $spriteTable[$spriteIndex]{'width'} = $width;
 	    $spriteTable[$spriteIndex]{'height'} = $height;
 	    $spriteTable[$spriteIndex]{'priority'} = $priority;
+	    $spriteTable[$spriteIndex]{'palOffset'} = $palOffset;
 	    $spriteTable[$spriteIndex]{'link'} = $link;
 	    $spriteTable[$spriteIndex]{'tileOffset'} = $tileOffset;
 	    $spriteTable[$spriteIndex]{'shown'} = $shown;
@@ -833,6 +880,7 @@ foreach my $gstFile (@gstFiles) {
 	    my $width = $spriteTable[$spriteIndex]{'width'};
 	    my $height = $spriteTable[$spriteIndex]{'height'};
 	    my $priority = $spriteTable[$spriteIndex]{'priority'};
+	    my $palOffset = $spriteTable[$spriteIndex]{'palOffset'};
 	    my $tileOffset = $spriteTable[$spriteIndex]{'tileOffset'};
 	    my $shown = $spriteTable[$spriteIndex]{'shown'};
 	    if ( $shown ) {
@@ -842,10 +890,12 @@ foreach my $gstFile (@gstFiles) {
 		    $tileUsage[(($tileOffset+$i) & 0x7FF)] |= VDP_USAGE_TILE_SPRITE;
 		}
 	    }
-	    if ( $priority ) {
-		$convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
-	    } else {
-		$convertSpriteLow = $convert . ' ' . $convertSpriteLow;
+	    if ( ( 1 << $palOffset ) & $palMask ) {
+		if ( $priority ) {
+		    $convertSpriteHigh = $convert . ' ' . $convertSpriteHigh;
+		} else {
+		    $convertSpriteLow = $convert . ' ' . $convertSpriteLow;
+		}
 	    }
 	    if ( $verbose ) {
 		my $v = $spriteTable[$spriteIndex]{'verbose'};
@@ -912,11 +962,13 @@ foreach my $gstFile (@gstFiles) {
 	    system("scdtile2img -width=$widthPlane -height=$heightPlane -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_planes.png");
 	    system("scdtile2img -width=$w1 -height=$h1 -background=${backdrop} -notransparency -colorzeronormal -palfile=${outPrefix}cram.bin -palcount=4 $pngcrushOption -imgfile=${outPrefix}backdrop_full.png");
 
-	    my $cmd = "convert -dispose None -delay 0 -loop 0 -size ${w1}x${h1}";
+	    my $cmd = "convert -dispose None -delay 100 -size ${w1}x${h1}";
 	    $cmd .= " xc:none";
-	    $cmd .= " -page +128+128 ${outPrefix}backdrop_screen.png";
-	    $cmd .= " -page +128+128 ${outPrefix}backdrop_planes.png";
-	    $cmd .= " -page +0+0 ${outPrefix}backdrop_full.png";
+	    if ( $palMask == 16 ) {
+		$cmd .= " -page +128+128 ${outPrefix}backdrop_screen.png";
+		$cmd .= " -page +128+128 ${outPrefix}backdrop_planes.png";
+		$cmd .= " -page +0+0 ${outPrefix}backdrop_full.png";
+	    }
 	    $cmd .= " -page +128+128 ${outPrefix}scrollb_low.png";
 	    $cmd .= " -page +128+128 ${outPrefix}scrolla_low.png";
 	    if ( $windowEnabled ) {
@@ -929,9 +981,19 @@ foreach my $gstFile (@gstFiles) {
 		$cmd .= " -page +128+128 ${outPrefix}window_high.png";
 	    }
 	    $cmd .= " $convertSpriteHigh";
-	    $cmd .= " ${outPrefix}composite.gif";
+#	    $cmd .= " -background none -layers dispose";
+	    $cmd .= " -loop 0";
+	    if ( $palMask == 0xF ) {
+		$cmd .= " ${outPrefix}composite.gif";
+	    } else {
+		$cmd .= " ${outPrefix}composite_palmask${palMask}.mng";
+	    }
 	    system($cmd);
-	    $cmd = "convert ${outPrefix}composite.gif -flatten ${outPrefix}composite.png";
+	    if ( $palMask == 0xF ) {
+		$cmd = "convert ${outPrefix}composite.gif -flatten ${outPrefix}composite.png";
+	    } else {
+		$cmd = "convert ${outPrefix}composite_palmask${palMask}.gif -flatten ${outPrefix}composite_palmask${palMask}.png";
+	    }
 	    system($cmd);
 	}
     }
@@ -1133,6 +1195,7 @@ scdgstextract [options] <gstfile>
   -68kram            extract 68k RAM
   -z80               extract everything z80 related
   -z80ram            extract z80 RAM
+  -ym                extract YM2612
   -vdp               extract everything VDP related
   -vdpreg            extract VDP registers
   -cram              extract CRAM
@@ -1140,6 +1203,10 @@ scdgstextract [options] <gstfile>
   -vsram             extract VSRAM
   -vram              extract VRAM
   -ramfiles          make bin files for RAM (example: <out>_ram68k.bin)
+  -palmask=<mask>    mask of palettes used, examples:
+                     1: only palette 0
+                     7: palettes 0, 1 and 2 but not palette 3
+                     F: all palettes (default)
   -png               make images for scroll a, window, scroll b, and sprites
   -pngcrush          use pngcrush to make smaller png files
   -composite         make composite image for VDP
