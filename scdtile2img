@@ -39,6 +39,7 @@ if ( $#ARGV < 0 ) {
 my $verbosity = 2;
 
 my $paletteMapCinepakFile = '';
+my $paletteMap = 0;
 
 my $tilesFile = '';
 my $tilesOffset = 0;
@@ -54,7 +55,6 @@ my $tileMapFile = '';
 my $tileMapOffset = 0;
 my $tileMap2TilesOffset = 0;
 my $tileMapWidth = 1;
-my $tileMapWidthBad = 0;
 
 my $imgWidth = 0;
 my $imgHeight = 0;
@@ -75,6 +75,9 @@ my $aspectY = 0;
 
 # 1 low, 2 high, 3 both (default)
 my $priorityMask = 0x03;
+my $palMask = 0xF;
+my $tilesIndexMin = 0x0000;
+my $tilesIndexMax = 0x07FF;
 
 my @tiles;
 
@@ -86,6 +89,8 @@ foreach my $arg (@ARGV) {
 	# do nothing
     } elsif ( $arg =~ /^-palmapcinepak=(.+)$/i ) {
 	$paletteMapCinepakFile = $1;
+    } elsif ( $arg =~ /^-palmap$/i ) {
+	$paletteMap = 1;
     } elsif ( $arg =~ /^-sprite$/i ) {
 	$tilesOrderPlane = 0;
 	$tilesReuse = 0;
@@ -159,7 +164,7 @@ foreach my $arg (@ARGV) {
     } elsif ( $arg =~ /^-map2tilesoffset=(\d+)$/i ) {
 	$tileMap2TilesOffset = $1;
     } elsif ( $arg =~ /^-map2tilesoffset=(0x|\$)([0-9A-Fa-f]+)$/i ) {
-	$tileMap2TilesOffset = $1;
+	$tileMap2TilesOffset = hex($2);
     } elsif ( $arg =~ /^-mapwidth=([12])$/i ) {
 	$tileMapWidth = $1;
     } elsif ( $arg =~ /^-priority=low$/i ) {
@@ -168,6 +173,18 @@ foreach my $arg (@ARGV) {
 	$priorityMask = 2;
     } elsif ( $arg =~ /^-priority=both$/i ) {
 	$priorityMask = 3;
+    } elsif ( $arg =~ /^-palmask=(\d+)/i ) {
+	$palMask = $1;
+    } elsif ( $arg =~ /^-palmask=(0x)?([0-F]+)/i ) {
+	$palMask = hex($2);
+    } elsif ( $arg =~ /^-tilesindexmin=(\d+)$/i ) {
+	$tilesIndexMin = $1;
+    } elsif ( $arg =~ /^-tilesindexmin=(0x|\$)([0-9A-Fa-f]+)$/i ) {
+	$tilesIndexMin = hex($2);
+    } elsif ( $arg =~ /^-tilesindexmax=(\d+)$/i ) {
+	$tilesIndexMax = $1;
+    } elsif ( $arg =~ /^-tilesindexmax=(0x|\$)([0-9A-Fa-f]+)$/i ) {
+	$tilesIndexMax = hex($2);
     } elsif ( $arg =~ /^-imgfile=(.+)$/i ) {
 	$imgFile = $1;
     } elsif ( $arg =~ /^-v=(\d+)$/i ) {
@@ -185,9 +202,43 @@ if ( $imgFile eq '' ) {
 
 $palette->ReadPalette();
 my $paletteMapCinepak = &ReadPaletteMapCinepak();
-&ReadTiles();
-my $tileMapData = &ReadTileMap();
-my $tileMapDataLength = length($tileMapData);
+
+my $tileMapData = '';
+my $tileMapDataLength = 0;
+if ( $paletteMap ) {
+    my $paletteCount = $palette->GetPaletteCount();
+    if ( $paletteCount > 4 ) {
+	$paletteCount = 4;
+    }
+
+    $tilesOffset = 0;
+    $tilesCount = 16;
+    $tilesCompress = 0;
+    $tilesWidth = 32;
+    $tilesWidthShift = 5;
+    $tilesOrderPlane = 1;
+    $tilesReuse = 1;
+    $tileMapOffset = 0;
+    $tileMap2TilesOffset = 0;
+    $tileMapWidth = 2;
+    $imgWidth = 8*16;
+    $imgHeight = 8*$paletteCount;
+    $trans = 0;
+    for ( my $i = 0; $i < 16; $i++ ) {
+	my $tileData = chr( ( $i << 4 ) | $i ) x 32;
+	push @tiles, $tileData;
+    }
+    for ( my $pal = 0; $pal < $paletteCount; $pal++ ) {
+	for ( my $i = 0; $i < 16; $i++ ) {
+	    my $tileMapEntryData = pack( "n", ( ( $pal << 13 ) | $i ) );
+	    $tileMapData .= $tileMapEntryData;
+	}
+    }
+} else {
+    &ReadTiles();
+    $tileMapData = &ReadTileMap();
+}
+$tileMapDataLength = length($tileMapData);
 
 &Tile2Img();
 
@@ -340,6 +391,9 @@ sub Tile2Img {
 			$flipVert   = ( $tileMapValue & 0x1000 ) >> 12;
 			$flipHorz   = ( $tileMapValue & 0x0800 ) >> 11;
 			$tilesIndex = ( $tileMapValue & 0x07FF );
+			if ( ( ( 1 << $pal ) & $palMask ) == 0 ) {
+			    $pal = -1;
+			}
 		    } else {
 			$tilesIndex = ord(substr($tileMapData,$tileMapIndex,1));
 		    }
@@ -360,6 +414,14 @@ sub Tile2Img {
 		} else {
 		    die "Bad internal priority mask: $priorityMask\n";
 		}
+	    }
+	    if ( $pal < 0 ) {
+		# masked due to palette mask
+		$tilesIndex = -1;
+	    }
+	    if ( $tilesIndex < $tilesIndexMin || $tilesIndex > $tilesIndexMax ) {
+		# masked due to tile index range
+		$tilesIndex = -1;
 	    }
 	    if ( $tilesIndex < 0 || $tilesIndex > $#tiles ) {
 		# tile does not exist, make transparent
@@ -667,6 +729,8 @@ scdtile2img [options]
 
 '.$palette->GetHelpString().'[options]
   -palmapcinepak=<file>  specifies the palette map file (cinepak format)
+  -palmap                outputs image representing the palettes
+                         (note: ignores tile and tilemap options)
   -tilesfile=<file>      specifies the tiles
   -tilesoffset=<#>       tile offset of the first tile in the tiles file
   -tilesbyteoffset=<#>   byte offset of the first tile in the tiles file
@@ -689,6 +753,12 @@ scdtile2img [options]
   -flipvert              flips the image vertically (useful for sprites)
   -priority=<p>          specified either low, high, or both (default)
                          tiles not meeting priority mask will be transparent
+  -palmask=<mask>        mask of palettes used, examples:
+                         1: only palette 0
+                         7: palettes 0, 1 and 2 but not palette 3
+                         F: all palettes (default)
+  -tilesindexmin=<#>     mask any tiles under a specified minimum
+  -tilesindexmax=<#>     mask any tiles under a specified maximum
   -width=<#>             specifies the width of the image
   -height=<#>            specifies the height of the image
   -aspect320x240         sets PNG aspect accordingly
