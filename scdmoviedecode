@@ -30,6 +30,8 @@ my $isTomcatAlley = 0;
 my $isCodeMonkeys = 0;
 my $isEcco32x = 0;
 
+my $wolfteamFormat = 0;
+
 my $extractImageData = 0;
 my $extractImagePNGs = 0;
 
@@ -56,12 +58,15 @@ my $seekCinepak = 0;
 my $seekCinepakAuto = 0;
 my $csv = 0;
 
+my $pcmIgnoreFF = 0;
+
 my @movieFiles;
 my $movieFormat = 'cinepak';
 my @movieFileOffsets;
 
 my $pcmFile = 'pcm.pcm';
 my $wavFile = 'pcm.wav';
+my $aviFile = 'avi.avi';
 my $paletteDataPrefix = 'paldata';
 my $paletteMapPrefix = 'palmap';
 my $tileDataPrefix = 'tiledata';
@@ -91,8 +96,15 @@ foreach my $arg (@ARGV) {
 	$movieFormat = 'stm';
     } elsif ( $arg =~ /^-sga$/i ) {
 	$movieFormat = 'sga';
+    } elsif ( $arg =~ /^-wolfteam$/i ) {
+	$movieFormat = 'wolfteam';
+    } elsif ( $arg =~ /^-wolfteam=(\d+)$/i ) {
+	$movieFormat = 'wolfteam';
+	$wolfteamFormat = $1;
     } elsif ( $arg =~ /^-pcmraw$/i ) {
 	$movieFormat = 'pcmraw';
+    } elsif ( $arg =~ /^-pcmignoreff$/i ) {
+	$pcmIgnoreFF = 1;
     } elsif ( $arg =~ /^-pcmfd=(\d+)$/i ) {
 	$pcmFD = $1;
     } elsif ( $arg =~ /^-pcmfd=0x([0-9A-F]+)$/i ) {
@@ -151,14 +163,22 @@ my $isoDate = '';
 # decode movies
 foreach my $movieFile (@movieFiles) {
 
+    if ( $ffmpeg ) {
+	system("rm ${paletteDataPrefix}*");
+	system("rm ${paletteMapPrefix}*");
+	system("rm ${tileDataPrefix}*");
+    }
+
     # use movie file based files
     if ( $movieFile =~ /^(.+)\.[A-Za-z0-9]+$/ ) {
 	my $movieFilePrefix = $1;
 	$pcmFile = $movieFilePrefix.'.pcm';
 	$wavFile = $movieFilePrefix.'.wav';
+	$aviFile = $movieFilePrefix.'.avi';
     } else {
 	$pcmFile = 'pcm.pcm';
 	$wavFile = 'pcm.wav';
+	$aviFile = 'avi.avi';
     }
 
     my $movieFileSize = -s $movieFile;
@@ -224,6 +244,8 @@ foreach my $movieFile (@movieFiles) {
 		    &ReadSGA($movieFileOffset);
 		} elsif ( $movieFormat eq 'pcmraw' ) {
 		    &ReadPCMRaw($movieFileOffset,$movieFileSize);
+		} elsif ( $movieFormat eq 'wolfteam' ) {
+		    &ReadWolfTeam($movieFileOffset,$movieFileSize);
 		} else {
 		    die "Bad movie format: $movieFormat\n";
 		}
@@ -237,6 +259,236 @@ foreach my $movieFile (@movieFiles) {
 
 ###############################################################################
 
+
+sub ReadWolfTeam {
+    # wolfteam? cobra command and time gal for sure
+    # OVR.BIN 0x6000 segments, 0x0000-0x0FCF are PCM, 0x1000-0x6000 frame
+    my ($movieFileOffset,$movieFileSize) = @_;
+
+    my $dataSize = $movieFileSize-$movieFileOffset;
+    my $data = '';
+
+    if ( read(MOVIE,$data,$dataSize) != $dataSize ) {
+	print STDERR "not enough characters for a DATA data\n";
+	return 0;
+    }
+
+    my $format = $wolfteamFormat;
+
+    # wolfteam format 0
+    #   (auto detect format)
+    # wolfteam formats common
+    #   Fixed byte size for each frame (unused bytes are zeros)
+    #   Single palette per frame
+    #   12572 Hz 8-bit stereo
+    # wolfteam format 1
+    #   (used by cobra command)
+    #   (used by time gal for everything except IPL.BIN)
+    #   FPS 6.286 (fixed frame size 0x6000, audio 0x7D0 chunks)
+    #   Unspecified image size, always 192x160
+    #   Uncompressed image data
+    # wolfteam format 2
+    #   (used by IPL.BIN for time gal, road avenger, and revenge of the ninja)
+    #   FPS 6.286 (fixed frame size 0x6000, audio 0x7D0 chunks)
+    #   Image size specified in format
+    #   Compressed image data
+    # wolfteam format 3
+    #   (used by road avenger for everything except IPL.BIN)
+    #   FPS 7.857 (fixed frame size 0x5000, audio 0x640 chunks)
+    #   Image size specified in format
+    #   Compressed image data
+    # wolfteam format 4
+    #   (used by revenge of the ninja for everything except IPL.BIN)
+    #   FPS 7.857 (fixed frame size 0x5000, audio 0x640 chunks)
+    #   Image size specified in format
+    #   Uncompressed image data
+    # wolfteam chunk format:
+    #   ($6000 length for format 1 and $5000 length for other formats)
+    #   $0000-$07FF: channel 1 pcm
+    #     ($07D0 length for format 1 and $0640 length for other formats)
+    #   $0800-$0FFF: channel 2 pcm
+    #     ($07D0 length for format 1 and $0640 length for other formats)
+    #   $1000-$101F: single palette
+    #   $1020-$103F:
+    #     format 1+2: zeros
+    #     format 2+3: ascii text
+    #   $1040- XXXX: image data
+    #     format 1:
+    #       $1040-$493F: uncompressed tile data
+    #       $4940-$5FFF: zeros
+    #     format 2+3:
+    #       $1040-$1045: "sarc20"
+    #       $1046-$1047: $0008
+    #       $1048-$1041: $0101
+    #       $104A      : image width in tiles
+    #       $104B      : image height in tiles
+    #       $104C-$104F: $00000000
+    #       $1050- XXXX: compressed image data
+    #     format 4:
+    #       $1040-$1041: $0101
+    #       $1042      : image width in tiles
+    #       $1043      : image height in tiles
+    #       $1044-$1047: $00000000
+    #       $1048- XXXX: uncompressed tile data (length based on image size)
+
+    if ( $format < 1 ) {
+	# auto check format
+	if ( substr($data,0x1040,0x04) eq 'sarc' ) {
+	    if ( substr($data,0x1020,0x0020) eq ( chr(0x00) x 0x20 ) ) {
+		$format = 2;
+	    } else {
+		$format = 3;
+	    }
+	} elsif ( substr($data,0x1040,0x0002) eq ( chr(0x01) x 2 ) &&
+		  substr($data,0x1044,0x0004) eq ( chr(0x00) x 4 ) ) {
+	    $format = 4;
+	} else {
+	    $format = 1;
+	}
+    }
+
+    my $chunkSize = 0x6000;
+    my $audioChunkSize = 0x7D0;
+    my $width = 24;
+    my $height = 20;
+
+    if ( $format == 3 ||
+	 $format == 4 ) {
+	$chunkSize = 0x5000;
+	$audioChunkSize = 0x640;
+    }
+
+    my $pcmFD = 0x0317;
+    my $sampleRate = int(12500000/384.0*$pcmFD/0x800);
+    my $fps = int(((12500000/384.0*$pcmFD/0x800)/$audioChunkSize)*1000)/1000;
+
+    if ( $dataSize % $chunkSize != 0 ) {
+	#return 0;
+	#die "Bad file\n";
+    }
+
+    my $pcmData0 = '';
+    my $pcmData1 = '';
+    my $frameCount = int( $dataSize / $chunkSize );
+
+    print "$frameCount\n";
+
+    my $tileDataLast = chr(0x00) x (32*$width*$height);
+
+    for ( my $frameIndex = 0; $frameIndex < $frameCount; $frameIndex++ ) {
+	my $frameData = substr($data,$chunkSize*$frameIndex,$chunkSize);
+	$pcmData0 .= substr($frameData,0x0000,$audioChunkSize);
+	$pcmData1 .= substr($frameData,0x0800,$audioChunkSize);
+
+	my $paletteData = substr($frameData,0x1000,0x0020);
+
+	my $frameTileDataOffset = 0x1040;
+	if ( $format == 2 ||
+	     $format == 3 ) {
+	    # 73 61 72 63 32 30 00 08 "sarc20..."
+	    # does last byte indicate number of 0x800 frames for image data?
+	    if ( substr($frameData,$frameTileDataOffset,8) ne ('sarc20'.chr(0x00).chr(0x08)) ) {
+		die "bad format 2 sarc at frame $frameIndex\n";
+	    }
+	    $frameTileDataOffset += 8;
+	}
+	if ( $format == 2 ||
+	     $format == 3 ||
+	     $format == 4 ) {
+	    # bytes 0-1 seem to always be 0x01
+	    # bytes 4-7 seem to always be 0x00
+	    my $frameWidth = ord(substr($frameData,$frameTileDataOffset+2,1));
+	    my $frameHeight = ord(substr($frameData,$frameTileDataOffset+3,1));
+	    if ( $frameIndex == 0 ) {
+		$width = $frameWidth;
+		$height = $frameHeight;
+		$tileDataLast = chr(0x00) x (32*$width*$height);
+	    } elsif ( $width != $frameWidth || $height != $frameHeight ) {
+		die "Unexpected frame dimensions changing $width x $height vs $frameWidth x $frameHeight at frame $frameIndex\n";
+	    }
+	    $frameTileDataOffset += 8;
+	}
+
+	my $tileData = '';
+	my $tileDataLength = 32*$width*$height;
+	if ( $format == 1 ||
+	     $format == 4 ) {
+	    $tileData = substr($frameData,$frameTileDataOffset,$tileDataLength);
+	} elsif ( $format == 2 ||
+		  $format == 3 ) {
+	    my $count = unpack("n",substr($frameData,$frameTileDataOffset,2));
+	    #my $length = $count * 2 + ( ( $count + 15 ) >> 4 ) * 2;
+	    #my $compressedData = substr($frameData,$frameTileDataOffset+2,$length);
+	    my $remaining = $count;
+	    # each entry is 2 bytes
+	    my $offset = $frameTileDataOffset+2;
+	    my $encodingWord = 0x0000;
+	    my $encodingBitIndex = -1;
+	    while ($remaining > 0) {
+		if ( $encodingBitIndex < 0 ) {
+		    $encodingWord = unpack("n",substr($frameData,$offset,2));
+		    $encodingBitIndex = 15;
+		    $offset += 2;
+		}
+		my $encodingBit = ( $encodingWord >> $encodingBitIndex ) & 1;
+		my $entry = substr($frameData,$offset,2);
+		$offset += 2;
+		my $debug = 0;
+		if ( $debug ) {
+		    printf("%4.4d %2.2d %4.4X %2.2d %d %4.4X %4.4X\n",$frameIndex,$remaining,$encodingWord,$encodingBitIndex,$encodingBit,unpack("n",$entry),length($tileData));
+		}
+		if ( $encodingBit ) {
+		    my $entryValue = unpack("n",$entry);
+		    if ( $entryValue < 0x8000 ) {
+			my $runlength = 2 * ( ( $entryValue >> 8 ) + 1 );
+			$tileData .= substr($entry,1,1) x $runlength;
+		    } elsif ( $entryValue < 0xC000 ) {
+			my $runlength = 2 * ( ( $entryValue & 0x000F ) + 2 );
+			my $previous = (($entryValue-0x8000)>>4)*2;
+#			printf("HEY 0x8000 %4.4X %4.4X\n",$previous,$runlength);
+			if ( $previous + $runlength <= length($tileData) ) {
+			    $tileData .= substr($tileData,$previous,$runlength);
+			} else {
+			    # TODO what is this magic?
+			    $tileData .= chr(0x00) x $runlength;
+			    #$tileData .= substr($tileDataLast,$previous,$runlength);
+			}
+		    } else {
+			# TODO what is this magic?
+			my $runlength = 2 * ( ( $entryValue & 0x000F ) + 2 );
+			$tileData .= chr(0x00) x $runlength;
+		printf("%4.4d %2.2d %4.4X %2.2d %d %4.4X\n",$frameIndex,$remaining,$encodingWord,$encodingBitIndex,$encodingBit,unpack("n",$entry));
+		    }
+		} else {
+		    $tileData .= $entry;
+		}
+		$encodingBitIndex--;
+		$remaining--;
+	    }
+	    my $tileDataLengthActual = length($tileData);
+	    if ( $tileDataLength != $tileDataLengthActual ) {
+#		if ( $tileDataLength > $tileDataLengthActual ) {
+		die "Bad decompression $tileDataLength vs $tileDataLengthActual at frame $frameIndex\n";
+#		} else {
+#		    $tileData = substr($tileData,0,$tileDataLength);
+#		}
+	    }
+	} else {
+	    die "Bad logic\n";
+	}
+	
+	$tileDataLast = $tileData;
+
+	&WriteImageData($frameIndex,$width*8,$paletteData,'',$tileData,"-notransparency");
+    }
+
+    my $pcmData = &InterleavePCMData($pcmData0,$pcmData1);
+    &SegaCDPCMToWav(2,$sampleRate,$pcmData);
+
+    &WriteMovies($fps);
+
+    return 1;
+}
 
 
 sub ReadSTM {
@@ -462,7 +714,10 @@ sub ReadPCMRaw {
 	return 0;
     }
 
-    my $pcmEnd = index($pcmData,chr(0xFF));
+    my $pcmEnd = $pcmSize;
+    if ( ! $pcmIgnoreFF ) {
+	$pcmEnd = index($pcmData,chr(0xFF));
+    }
     if ( $pcmEnd > 0 ) {
 	$pcmData = substr($pcmData,0,$pcmEnd-1);
     } elsif ( $pcmEnd == 0 ) {
@@ -1236,6 +1491,27 @@ sub ReadCinepakForSega {
     }
 }
 
+sub InterleavePCMData {
+    my $channels = $#_ + 1;
+    if ( $channels <= 1 ) {
+	die "Do not call this function like this\n";
+    }
+    my $length = length($_[0]);
+    for ( my $channelIndex = 0; $channelIndex < $channels; $channelIndex++ ) {
+	my $length2 = length($_[$channelIndex]);
+	if ( $length != $length2 ) {
+	    die "Channel data not same length ($length) vs ($length2)\n";
+	}
+    }
+    my $pcmData = '';
+    for ( my $pcmDataIndex = 0; $pcmDataIndex < $length; $pcmDataIndex++ ) {
+	for ( my $channelIndex = 0; $channelIndex < $channels; $channelIndex++ ) {
+	    $pcmData .= substr($_[$channelIndex],$pcmDataIndex,1);
+	}
+    }
+    return $pcmData;
+}
+
 sub SegaCDPCMToWav {
     my ($wavChannels,$wavSampleRate,$pcmData) = @_;
 
@@ -1272,8 +1548,12 @@ sub SegaCDPCMToWav {
 		# convert from sign/magnitude to unsigned
 		my $valueSM = ord(substr($pcmData,$i,1));
 		if ( $valueSM == 0xFF ) {
-		    print STDERR "seeing end of PCM flag ($i)\n";
-		    return 0;
+		    if ( $pcmIgnoreFF ) {
+			$valueSM = 0x00;
+		    } else {
+			print STDERR "seeing end of PCM flag ($i)\n";
+			return 0;
+		    }
 		}
 		my $value;
 		if ( $valueSM & 0x80 ) {
@@ -1327,7 +1607,9 @@ sub WriteImageData {
     my $tileDataFile = &WriteTileData($index,$tileData);
 
     if ( $extractImagePNGs ) {
-	my $cmd = "scdtile2img $scdtile2imgArgs -palfile=$paletteDataFile -plane -width=$width -tilesfile=$tileDataFile -imgfile=$tileDataFile.png";
+	my $pngFile = $tileDataFile.'.png';
+	$pngFile =~ s/\.bin\.png/.png/;
+	my $cmd = "scdtile2img $scdtile2imgArgs -palfile=$paletteDataFile -plane -width=$width -tilesfile=$tileDataFile -imgfile=$pngFile";
 	if ( $pngcrush ) {
 	    $cmd .= " -pngcrush";
 	}
@@ -1347,8 +1629,14 @@ sub WriteMovies {
 
     # TODO -aspect 4:3 for 256x224 32 column movies
     # TODO could even find ratio for other sizes with some math...
+    # TODO no longer works with avconv
     if ( $ffmpeg ) {
-	system("ffmpeg -r $ffmpegFrameRate -i ${tileDataPrefix}%05d.png -i $wavFile -acodec pcm_u8 -sameq ffmpeg.avi");
+	if ( $ENV{'USER'} eq 'bgvanbur' ) {
+	    system("mogrify -format bmp ${tileDataPrefix}*.png");
+	    system("ffmpeg -r $ffmpegFrameRate -i ${tileDataPrefix}%05d.bmp -i $wavFile -acodec pcm_u8 -sameq $aviFile");
+	} else {
+	    system("ffmpeg -r $ffmpegFrameRate -i ${tileDataPrefix}%05d.png -i $wavFile -acodec pcm_u8 -sameq $aviFile");
+	}
     }
 }
 
@@ -1373,12 +1661,15 @@ scdmovieencode [options] <moviefiles...>
   -ecco32x           decode as Ecco 32X demo deviation of cinepak
   -stm               decode as Sonic CD\'s OPN.STM format
   -sga               decode as SGA format
+  -wolfteam          decode as WolfTeam format
+                     (only PCM supported for now)
   -pcmraw            decode as raw PCM
   -pcmfd=<#>         override pcmFD value
+  -pcmignoreff       ignore PCM byte values of 0xFF as end of PCM stream
   -extractimagedata  extract paldata*.bin, palmap*.bin, and tiledata*.bin
   -extractpngs       convert image data into pngs using scdtile2img
-  -extractpcm        extract raw pcm data (pcm.pcm)
-  -extractwav        convert pcm to wav file (pcm.wav)
+  -extractpcm        extract raw pcm data
+  -extractwav        convert pcm to wav file
   -pngcrush          use pngcrush to make smaller png files
   -ffmpeg            use ffmpeg to make an avi file of the cinepak movie
   -reencode          use various scdtools to reencode a cinepak movie
