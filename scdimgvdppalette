@@ -118,6 +118,9 @@ sub ImgExtractColors($) {
     my $imgOriginal = Image::Magick->new();
     my $x = $imgOriginal->ReadImage($imgFile);
     warn $x if $x;
+    #$imgOriginal->Set(alpha=>"Off");
+
+    #my $imgAlpha = $imgOriginal->Separate(channel=>'Alpha');
 
     if ( $trim ) {
 	$imgOriginal->Trim();
@@ -273,6 +276,7 @@ sub ImgExtractColors($) {
 	    print "Writing $file (VDP color palette after quantization)\n";
 	    $imgPalette->Write($file);
 	}
+	$palette->OutputPalette();
 
 	$img = $imgOriginal->Clone();
     } elsif ( $palette->GetColorsCountRead() != $palette->GetColorsCount() ) {
@@ -289,6 +293,9 @@ sub ImgExtractColors($) {
     } else {
 	die "Bad dither final: $ditherFinal\n";
     }
+
+    #$img->Composite(image=>$imgOriginal,compose=>'CopyOpacity');
+    $img->Composite(image=>$imgOriginal,compose=>'DstIn');
 
     {
 	my $file = 'scdimgvdppalette_'.$imgFile;
