@@ -39,6 +39,10 @@ if ( $type =~ m/^00$/i ) {
     $data = chr(0x00) x $length;
 } elsif ( $type =~ m/^ff$/i ) {
     $data = chr(0xFF) x $length;
+} elsif ( $type =~ m/^([0-9A-F]){2}$/i ) {
+    $data = chr(hex($type)) x $length;
+} elsif ( $type =~ m/^([0-9A-F]){4}$/i ) {
+    $data = substr(((chr(hex(substr($type,0,2))).chr(hex(substr($type,2,2)))) x (($length+1)>>1)),0,$length);
 } elsif ( $type =~ m/^tilepattern$/i ) {
     $data = substr(((chr(0x01).chr(0x23).chr(0x45).chr(0x67).chr(0x89).chr(0xAB).chr(0xCD).chr(0xEF)) x (($length+7)>>3)),0,$length);
 } else {
@@ -59,6 +63,8 @@ scdbinempty <type> <file> <length>
 
 <type>  00           fill with 0x00
         ff           fill with 0xFF
+        xx           fill with hexadecimal byte
+        xxxx         fill with hexadecimal byte pair
         tilepattern  fill with 0x0123456789ABCDEF
 
 ';
