@@ -1,0 +1,145 @@
+#!/usr/bin/env perl
+###############################################################################
+# Copyright (c) 2015 by bgvanbur
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+###############################################################################
+# convert images to cvid cinepak frames
+###############################################################################
+
+use strict;
+use warnings;
+
+use Image::Magick;
+
+if ( $#ARGV < 0 ) {
+    &Help();
+}
+
+
+my $img;
+my $imgAlpha = 0;
+
+my @imgFiles;
+
+foreach my $arg (@ARGV) {
+    if ( $arg =~ /^-asmtiles=(.*)$/i ) {
+	# TODO
+    } elsif ( -e $arg ) {
+	push @imgFiles, $arg;
+    } else {
+	print STDERR "\nCould not parse argument: $arg\n";
+	&Help();
+    }
+}
+
+if ( $#imgFiles < 0 ) {
+    print STDERR "\nNeed to specify image files\n";
+    &Help();
+}
+
+# TODO
+my $imgFile = $imgFiles[0];
+
+
+$img = Image::Magick->new();
+my $z = $img->ReadImage($imgFile);
+warn $z if $z;
+$imgAlpha = $img->Get('matte');
+my $width = $img->Get('width');
+my $height = $img->Get('height');
+
+for ( my $x1 = 0 ; $x1 < 4; $x1++ ) {
+    for ( my $y1 = 0 ; $y1 < 4; $y1++ ) {
+	my ($y,$u,$v) = &GetYUV($img,$x1,$y1);
+#	print "xy $x1 x $y1 yuv $y $u $v\n";
+	my $y2 = int($y);
+	my $u2 = int($u);
+	my $v2 = int($v);
+	printf("xy %d x %d yuv %2.2X %2.2X %2.2X\n",$x1,$y1,$y2&0xFF,$u2&0xFF,$v2&0xFF);
+    }
+}
+
+# YUV12 4:2:0
+
+# | r |   | 1.0  0.0  2.0 | | y |
+# | g | = | 1.0 -0.5 -1.0 | | u |
+# | b |   | 1.0  2.0  0.0 | | v |
+
+# Wr = 0.2857 Wb = 0.1429
+# Umax = 0.4286 Vmax = 0.3571
+
+# | y |   |  0.2857  0.5714  0.1429 | | r |
+# | u | = | -0.1429 -0.2857  0.4286 | | g |
+# | v |   |  0.3571 -0.2857 -0.0714 | | b |
+
+# Wr = 0.299 Wg = 0.587 Wb = 0.114
+# 2 = ( 1 - Wb ) / Umax -> Umax = 0.443
+# 2 = ( 1 - Wr ) / Vmax -> Vmax = 0.3505
+
+# | y |   |  0.299   0.587   0.114  | | r |
+# | u | = | -0.1495 -0.2935  0.443  | | g |
+# | v |   |  0.3505 -0.2935 -0.057  | | b |
+
+# y is luma
+# u is blue component from red  / green
+# v is red  component from blue / green
+
+sub GetYUV {
+    my ($img,$x1,$y1) = @_;
+    my $a = $img->GetPixel('channel'=>'Alpha','normalize'=>1,'x'=>$x1,'y'=>$y1);
+    if ( defined $a && $a == 1 ) {
+	return 0;
+    }
+    my ($r,$g,$b) = $img->GetPixel('channel'=>'RGB','normalize'=>1,'x'=>$x1,'y'=>$y1);
+
+    printf("%d %d %d\n",$r*255,$g*255,$b*255);
+
+    # 8 bit unsigned y, 8 bit signed u and v
+    #my $y =   (   0.2857 * $r + 0.5714 * $g + 0.1429 * $b ) * 255;
+    #my $u = ( ( - 0.1429 * $r - 0.2857 * $g + 0.4286 * $b ) ) * 127 / ( 0.4286 );
+    #my $v = ( (   0.3571 * $r - 0.2857 * $g - 0.0714 * $b ) ) * 127 / ( 0.3571 );
+    #my $y =   (   0.2126 * $r + 0.7152 * $g + 0.0722 * $b ) * 255;
+    #my $u = ( ( - 0.09991 * $r - 0.33609 * $g + 0.4360 * $b ) ) * 127 / ( 0.4360 );
+    #my $v = ( (   0.615 * $r - 0.55861 * $g - 0.05639 * $b ) ) * 127 / ( 0.615 );
+
+    #my $yp =   (   0.2857 * $r + 0.5714 * $g + 0.1429 * $b );
+    #my $y = 255 * $yp;
+    #my $u = 127 * ( $b - $y ) / ( 1 - 0.1429 );
+    #my $v = 127 * ( $r - $y ) / ( 1 - 0.2857 );
+
+    # why is this closer than other
+    my $yp =   ( 0.2126 * $r + 0.7152 * $g + 0.0722 * $b );
+    my $y = 220 * $yp + 18;
+    my $u = 112 * ( $b - $yp ) / ( 1 - 0.0722 );
+    my $v = 112 * ( $r - $yp ) / ( 1 - 0.2126 );
+
+    # | y |   |  0.299   0.587   0.114  | | r |
+    # | u | = | -0.1495 -0.2935  0.443  | | g |
+    # | v |   |  0.3505 -0.2935 -0.057  | | b |
+    my $y =   (   0.299 * $r + 0.587 * $g + 0.114 * $b ) * 220+18;
+    my $u = ( ( - 0.1495 * $r - 0.2935 * $g + 0.443 * $b ) ) * 112 / ( 0.443 );
+    my $v = ( (   0.3505 * $r - 0.2935 * $g - 0.057 * $b ) ) * 112 / ( 0.3505 );
+
+#    my $y = int( 76 * $r + 150 * $g + 29 * $b + 0.5 );
+#    my $u = int( -43 * $r + -84 * $g + 127 * $b + .5 );
+#    my $v = int( 127 * $r + -106 * $g + -21 * $b + .5 );
+
+#    my $y = int( 76 * $r + 150 * $g + 29 * $b + 0.5 );
+#    my $u = int( -43 * $r + -84 * $g + 127 * $b + .5 );
+#    my $v = int( 127 * $r + -106 * $g + -21 * $b + .5 );
+
+    return ($y,$u,$v);
+}
