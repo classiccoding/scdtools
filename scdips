@@ -30,8 +30,8 @@ if ( $type =~ /^\s*patch\s*$/i ) {
     $make = 0;
 } elsif ( $type =~ /^\s*make\s*$/i ) {
     $make = 1;
-} elsif ( $type =~ /^\s*text\s*$/i ) {
-    $make = 2;
+# } elsif ( $type =~ /^\s*text\s*$/i ) {
+#     $make = 2;
 } else {
     print STDERR "Need to specify convert or make\n";
     &Help();
@@ -199,9 +199,13 @@ if ( $make == 1 ) {
 	    if ( $ipsOffset + $size > $ipsLength ) {
 		die "Invalid IPS data\n";
 	    }
+	    if ( $offset > $romFile0Length ) {
+		print STDERR "IPS patch is skipping bytes between end and patch, inserting zeros\n";
+	    }
 	    if ( $offset + $size > $romFile0Length ) {
-		# TODO
-		die "Untested support for lengthing original binary\n";
+		# need to lengthen the ROM
+		$romFile1Data .= chr(0x00) x ( $offset + $size - $romFile0Length );
+		$romFile0Length = $offset + $size;
 	    }
 	    my $data = substr($ipsData,$ipsOffset,$size);
 	    substr($romFile1Data,$offset,$size) = $data;
@@ -217,7 +221,15 @@ if ( $make == 1 ) {
 	    my $data = substr($ipsData,$ipsOffset,1);
 	    $ipsOffset += 1;
 	    if ( $verbosity >= 2 ) {
-		printf("IPS RLE record: offset=0x%6.6X repeat=0x%4.4X data=0x%2.2X\n",$offset,$repeat,$data);
+		printf("IPS RLE record: offset=0x%6.6X repeat=0x%4.4X data=0x%2.2X\n",$offset,$repeat,ord($data));
+	    }
+	    if ( $offset > $romFile0Length ) {
+		print STDERR "IPS patch is skipping bytes between end and patch, inserting zeros\n";
+	    }
+	    if ( $offset + $repeat > $romFile0Length ) {
+		# need to lengthen the ROM
+		$romFile1Data .= chr(0x00) x ( $offset + $repeat - $romFile0Length );
+		$romFile0Length = $offset + $repeat;
 	    }
 	    substr($romFile1Data,$offset,$repeat) = ( $data x $repeat );
 	}
@@ -231,58 +243,58 @@ if ( $make == 1 ) {
     binmode ROM;
     print ROM $romFile1Data;
     close ROM;
-} elsif ( $make == 2 ) {
-    # text
-    open( TEXT, $ipsFile ) or die "Could not read file: $ipsFile\n";
+# } elsif ( $make == 2 ) {
+#     # text
+#     open( TEXT, $ipsFile ) or die "Could not read file: $ipsFile\n";
 
-    my $romFile1Data = $romFile0Data;
+#     my $romFile1Data = $romFile0Data;
 
-    while ( my $textLine = <TEXT> ) {
-	chomp $textLine;
-	# remove comments (;)
-	$textLine =~ s/^([^;]*);.*$/$1/;
-	my $addr = 0;
-	my $src = '';
-	my $dest = '';
-	if ( $textLine =~ /^\s*(?:0x|\$)([0-9A-F]+)\s*:\s*(?:0x|\$)([0-9A-F]+)\s*->\s*(?:0x|\$)([0-9A-F]+)\s*$/ ) {
-	    $addr = hex($1);
-	    $src = $2;
-	    $dest = $3;
-	} elsif ( $textLine =~ /^\s*(?:0x|\$)([0-9A-F]+)\s*:\s*(?:0x|\$)([0-9A-F]+)\s*$/ ) {
-	    $addr = hex($1);
-	    $dest = $2;
-	} elsif ( $textLine !~ /^\s*$/ ) {
-	    die "Unparsed line: $textLine\n";
-	}
-	if ( $src ne '' ) {
-	    my $srcPacked = pack("H*",$src);
-	    my $srcPackedLength = length($srcPacked);
-	    if ( $addr+$srcPackedLength <= $romFile0Length &&
-		 substr($romFile1Data,$addr,$srcPackedLength) eq $srcPacked ) {
-		# src matches
-	    } else {
-		print STDERR "textline: ".$textLine."\n";
-		print STDERR "source: ".unpack("H*",substr($romFile1Data,$addr,$srcPackedLength))."\n";
-		die "Source data in text patch does not match binary file data for address\n";
-	    }
-	}
-	if ( $dest ne '' ) {
-	    my $destPacked = pack("H*",$dest);
-	    my $destPackedLength = length($destPacked);
-	    # print "$textLine: $destPackedLength\n";
-	    if ( $addr+$destPackedLength <= $romFile0Length ) {
-		substr($romFile1Data,$addr,$destPackedLength) = $destPacked;
-	    } else {
-		die "Dest data does not fit\n";
-	    }
-	}
-    }
-    close TEXT;
+#     while ( my $textLine = <TEXT> ) {
+# 	chomp $textLine;
+# 	# remove comments (;)
+# 	$textLine =~ s/^([^;]*);.*$/$1/;
+# 	my $addr = 0;
+# 	my $src = '';
+# 	my $dest = '';
+# 	if ( $textLine =~ /^\s*(?:0x|\$)([0-9A-F]+)\s*:\s*(?:0x|\$)([0-9A-F]+)\s*->\s*(?:0x|\$)([0-9A-F]+)\s*$/ ) {
+# 	    $addr = hex($1);
+# 	    $src = $2;
+# 	    $dest = $3;
+# 	} elsif ( $textLine =~ /^\s*(?:0x|\$)([0-9A-F]+)\s*:\s*(?:0x|\$)([0-9A-F]+)\s*$/ ) {
+# 	    $addr = hex($1);
+# 	    $dest = $2;
+# 	} elsif ( $textLine !~ /^\s*$/ ) {
+# 	    die "Unparsed line: $textLine\n";
+# 	}
+# 	if ( $src ne '' ) {
+# 	    my $srcPacked = pack("H*",$src);
+# 	    my $srcPackedLength = length($srcPacked);
+# 	    if ( $addr+$srcPackedLength <= $romFile0Length &&
+# 		 substr($romFile1Data,$addr,$srcPackedLength) eq $srcPacked ) {
+# 		# src matches
+# 	    } else {
+# 		print STDERR "textline: ".$textLine."\n";
+# 		print STDERR "source: ".unpack("H*",substr($romFile1Data,$addr,$srcPackedLength))."\n";
+# 		die "Source data in text patch does not match binary file data for address\n";
+# 	    }
+# 	}
+# 	if ( $dest ne '' ) {
+# 	    my $destPacked = pack("H*",$dest);
+# 	    my $destPackedLength = length($destPacked);
+# 	    # print "$textLine: $destPackedLength\n";
+# 	    if ( $addr+$destPackedLength <= $romFile0Length ) {
+# 		substr($romFile1Data,$addr,$destPackedLength) = $destPacked;
+# 	    } else {
+# 		die "Dest data does not fit\n";
+# 	    }
+# 	}
+#     }
+#     close TEXT;
 
-    open( ROM, '>'.$romFile1 ) or die "Could not read file: $romFile1\n";
-    binmode ROM;
-    print ROM $romFile1Data;
-    close ROM;
+#     open( ROM, '>'.$romFile1 ) or die "Could not read file: $romFile1\n";
+#     binmode ROM;
+#     print ROM $romFile1Data;
+#     close ROM;
 } else {
     die "Bad logic\n";
 }
@@ -293,16 +305,19 @@ sub Help {
     die '
 scdips patch <ipsfile> <binfile> [binfileout]
 scdips make  <ipsfile> <binfileoriginal> <binfileupdated>
-scdips text <ipsfile> <binfile> [binfileout]
 
 [description]
   Patch updates binary file using IPS format. If binfileout is not specified
     updates binfile.
   Make makes a IPS file based on original and updated file.
-  Text uses a text based file for patching.
-    ; comments
-    $00100 : $00 -> $FF
-    $00102 : $80
 
 ';
+# removed text option, using scdpatchasm instead for my hacks
+#
+# scdips text <ipsfile> <binfile> [binfileout]
+#
+#   Text uses a text based file for patching.
+#     ; comments
+#     $00100 : $00 -> $FF
+#     $00102 : $80
 }
